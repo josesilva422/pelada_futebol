@@ -1,92 +1,52 @@
 'use strict';
+// Servidor local (desenvolvimento e uso na rede do campo): guarda os dados em data/db.json
+// e atualiza os celulares por SSE. Em produção (Netlify + Supabase) quem atende é netlify/functions/api.js.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const crypto = require('crypto');
 const L = require('./src/logic');
+const { createApi } = require('./src/api');
 
 const PORT = Number(process.env.PORT) || 3333;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data', 'db.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-// ---------- persistencia ----------
+// ---------- armazenamento em arquivo ----------
 
-function load() {
-  try {
-    return L.normalizeDb(JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')));
-  } catch {
-    return L.defaultDb();
-  }
+let current;
+try {
+  current = L.normalizeDb(JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')));
+} catch {
+  current = L.defaultDb();
 }
-
-function save() {
-  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  const tmp = DATA_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(db));
-  fs.renameSync(tmp, DATA_FILE);
-}
-
-const db = load();
-
-// ---------- autenticacao (perfil admin) ----------
-
-const adminToken = () => crypto.createHmac('sha256', db.secret).update('admin:' + ADMIN_PASSWORD).digest('hex');
-
-function safeEqual(a, b) {
-  const ha = crypto.createHash('sha256').update(String(a)).digest();
-  const hb = crypto.createHash('sha256').update(String(b)).digest();
-  return crypto.timingSafeEqual(ha, hb);
-}
-
-// o EventSource do navegador não envia cabeçalhos, então o stream aceita ?token=
-const tokenOf = (req, url) => (req.headers.authorization || '').replace(/^Bearer\s+/i, '') || url.searchParams.get('token') || '';
-const isAdmin = (req, url) => safeEqual(tokenOf(req, url), adminToken());
-
-// ---------- tempo real (SSE) ----------
+let version = 0;
 
 const clients = new Map(); // resposta SSE -> { admin, code }
-const stateFor = ({ admin, code }) => L.viewState(db, Date.now(), { admin, code });
+const stateFor = ({ admin, code }) => L.viewState(current, Date.now(), { admin, code });
 
-function broadcast() {
-  clients.forEach((who, res) => res.write(`data: ${JSON.stringify(stateFor(who))}\n\n`));
-}
+const store = {
+  async load() { return { db: JSON.parse(JSON.stringify(current)), version }; },
+  async save(db, v) {
+    if (v !== version) return false;
+    version++;
+    current = db;
+    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+    const tmp = DATA_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(db));
+    fs.renameSync(tmp, DATA_FILE);
+    return true;
+  },
+  async notify() {
+    clients.forEach((who, res) => res.write(`data: ${JSON.stringify(stateFor(who))}\n\n`));
+  },
+};
 
-function commit() {
-  save();
-  broadcast();
-}
+const api = createApi({ adminPassword: ADMIN_PASSWORD, realtime: null }); // realtime null: o navegador usa SSE
 
-setInterval(() => {
-  if (L.tick(db, Date.now())) commit();
-}, 500);
+setInterval(() => api.tick(store).catch(console.error), 500); // encerra a partida quando o tempo acaba
 setInterval(() => clients.forEach((who, res) => res.write(': ping\n\n')), 20000);
-
-// ---------- rotas de escrita (somente admin) ----------
-
-const id = '([a-f0-9]+)';
-const routes = [
-  ['POST', /^\/api\/players$/, (d, n, p, b) => L.addPlayer(d, b)],
-  ['PUT', new RegExp(`^/api/players/${id}$`), (d, n, p, b) => L.updatePlayer(d, p[0], b)],
-  ['DELETE', new RegExp(`^/api/players/${id}$`), (d, n, p) => L.deletePlayer(d, p[0])],
-  ['POST', /^\/api\/session\/start$/, (d) => L.startPelada(d)],
-  ['POST', /^\/api\/session\/end$/, (d) => L.endPelada(d)],
-  ['POST', /^\/api\/session\/checkin$/, (d, n, p, b) => L.arrive(d, b.playerId)],
-  ['POST', /^\/api\/session\/draw$/, (d) => L.draw(d)],
-  ['POST', /^\/api\/session\/redraw$/, (d) => L.redraw(d)],
-  ['POST', new RegExp(`^/api/session/players/${id}/back$`), (d, n, p) => L.sendToBack(d, p[0])],
-  ['POST', new RegExp(`^/api/session/players/${id}/remove$`), (d, n, p) => L.removePlayer(d, p[0])],
-  ['POST', /^\/api\/match\/start$/, (d, n) => L.startMatch(d, n)],
-  ['POST', /^\/api\/match\/pause$/, (d, n) => L.pauseMatch(d, n)],
-  ['POST', /^\/api\/match\/resume$/, (d, n) => L.resumeMatch(d, n)],
-  ['POST', /^\/api\/match\/finish$/, (d, n) => L.finishMatch(d, 'manual', n)],
-  ['POST', /^\/api\/match\/next$/, (d, n, p, b) => L.nextMatch(d, n, b.winnerTeamId)],
-  ['POST', /^\/api\/match\/goal$/, (d, n, p, b) => L.recordGoal(d, b, n)],
-  ['DELETE', new RegExp(`^/api/match/goals/${id}$`), (d, n, p) => L.undoGoal(d, p[0])],
-  ['PUT', /^\/api\/config$/, (d, n, p, b) => L.setConfig(d, b)],
-  ['POST', /^\/api\/season\/reset$/, (d) => L.resetSeason(d)],
-];
 
 // ---------- http ----------
 
@@ -105,7 +65,7 @@ function readBody(req) {
       if (raw.length > 100_000) { reject(new L.AppError('Requisição muito grande', 413)); req.destroy(); }
     });
     req.on('end', () => {
-      try { resolve(raw ? JSON.parse(raw) : {}); } catch { reject(new L.AppError('JSON inválido')); }
+      try { resolve(raw ? JSON.parse(raw) : null); } catch { reject(new L.AppError('JSON inválido')); }
     });
   });
 }
@@ -126,13 +86,9 @@ const server = http.createServer(async (req, res) => {
   try {
     if (!pathname.startsWith('/api/')) return serveStatic(req, res, pathname);
 
-    const admin = isAdmin(req, url);
-    const who = { admin, code: url.searchParams.get('code') };
-
-    if (req.method === 'GET' && pathname === '/api/state') return send(res, 200, stateFor(who));
-    if (req.method === 'GET' && pathname === '/api/me') return send(res, 200, { admin });
-
     if (req.method === 'GET' && pathname === '/api/stream') {
+      const { db } = await store.load();
+      const who = { admin: api.isAdmin(db, { headers: req.headers, query: url.searchParams }), code: url.searchParams.get('code') };
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
       res.write(`data: ${JSON.stringify(stateFor(who))}\n\n`);
       clients.set(res, who);
@@ -140,23 +96,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === 'POST' && pathname === '/api/login') {
-      const body = await readBody(req);
-      await new Promise((r) => setTimeout(r, 300)); // freia tentativas de adivinhar a senha
-      if (!safeEqual(body.password || '', ADMIN_PASSWORD)) throw new L.AppError('Senha incorreta', 401);
-      return send(res, 200, { token: adminToken() });
-    }
-
-    for (const [method, re, handler] of routes) {
-      const m = req.method === method && pathname.match(re);
-      if (!m) continue;
-      if (!admin) throw new L.AppError('Acesso restrito ao administrador', 401);
-      const body = method === 'POST' || method === 'PUT' ? await readBody(req) : {};
-      handler(db, Date.now(), m.slice(1), body);
-      commit();
-      return send(res, 200, stateFor(who));
-    }
-    send(res, 404, { error: 'Rota não encontrada' });
+    const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req) : null;
+    const out = await api.handle(store, { method: req.method, pathname, query: url.searchParams, headers: req.headers, body });
+    send(res, out.status, out.body);
   } catch (e) {
     if (!(e instanceof L.AppError)) console.error(e);
     send(res, e.status || 500, { error: e instanceof L.AppError ? e.message : 'Erro interno' });

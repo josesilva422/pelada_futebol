@@ -14,7 +14,10 @@
   let offset = 0; // relogio do servidor - relogio local
   let token = keep(TOKEN_KEY);
   let code = keep(CODE_KEY);
-  let source = null;
+  let source = null; // SSE (servidor local)
+  let realtimeCfg; // undefined: ainda não carregou; null: sem Supabase (usa SSE); senão { url, anonKey }
+  let channel = null; // canal Realtime do Supabase
+  let lastEndFetch = 0;
   let tab = 'jogo';
   let rankBy = 'goals';
   let search = '';
@@ -111,16 +114,44 @@
     render();
   }
 
-  function connect() {
-    if (source) source.close();
-    source = new EventSource(`/api/stream?${qs()}${token ? '&token=' + encodeURIComponent(token) : ''}`);
-    source.onmessage = (e) => setState(JSON.parse(e.data));
+  const loadScript = (src) => new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = resolve;
+    el.onerror = reject;
+    document.head.appendChild(el);
+  });
+
+  async function fetchState() {
+    try { setState(await api('GET', `/api/state?${qs()}`)); } catch { /* tenta de novo no próximo ciclo */ }
+  }
+
+  // Produção: o Supabase Realtime só avisa "algo mudou" e cada celular pede o estado à API (que valida o código).
+  // Servidor local: SSE. Nos dois casos há polling de segurança.
+  async function connect() {
+    if (realtimeCfg === undefined) {
+      try { realtimeCfg = (await api('GET', '/api/config')).realtime || null; } catch { realtimeCfg = null; }
+    }
+    if (!realtimeCfg) {
+      if (source) source.close();
+      source = new EventSource(`/api/stream?${qs()}${token ? '&token=' + encodeURIComponent(token) : ''}`);
+      source.onmessage = (e) => setState(JSON.parse(e.data));
+      return;
+    }
+    if (channel) return; // o canal é o mesmo para todos, não depende do código nem do login
+    try {
+      await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js');
+      const client = window.supabase.createClient(realtimeCfg.url, realtimeCfg.anonKey);
+      channel = client.channel('pelada').on('broadcast', { event: 'changed' }, fetchState).subscribe();
+    } catch { /* sem tempo real: o polling mantém a tela atualizada */ }
   }
 
   async function refresh() {
-    connect();
-    try { setState(await api('GET', `/api/state?${qs()}`)); } catch { /* o stream assume */ }
+    await connect();
+    await fetchState();
   }
+
+  setInterval(() => { if (realtimeCfg) fetchState(); }, 10000);
 
   function logout() {
     token = ''; code = '';
@@ -450,6 +481,11 @@
     const ms = remainingMs();
     el.textContent = fmt(ms);
     el.classList.toggle('low', ms <= 60000 && state.session.match.status === 'running');
+    // o tempo acabou: pede o estado para pegar o fim de jogo (o servidor encerra a partida ao ler)
+    if (ms === 0 && state.session.match.status === 'running' && Date.now() - lastEndFetch > 2000) {
+      lastEndFetch = Date.now();
+      fetchState();
+    }
   }, 250);
 
   // ---------- modais de acao ----------

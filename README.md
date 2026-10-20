@@ -44,6 +44,33 @@ Regras (duração, gols, jogadores por time) ficam em Admin > Regras da partida.
 
 O sistema toca um **apito** quando a partida inicia (1 apito) e quando termina (3 apitos), em todos os celulares conectados. O navegador só libera som depois de um toque na página, então toque em qualquer botão uma vez ao abrir. O botão 🔊/🔇 no topo liga e desliga.
 
+## Publicar: Netlify + Supabase
+
+Em produção o sistema usa o **Supabase** (banco e tempo real) e o **Netlify** (site + função da API). As regras são as mesmas; o `npm start` local continua funcionando para desenvolver e para usar só na rede do campo.
+
+```
+celular ──► Netlify (public/ = site)         ┌────────────► Supabase Realtime (avisa "mudou")
+   │                                          │                     │
+   └──► /api/* ──► função netlify/functions/api.js ──► Supabase (tabela pelada_state)
+```
+
+**1. Supabase**
+1. Crie o projeto em supabase.com.
+2. Em *SQL Editor*, rode o conteúdo de [`supabase/migrations/20261020000000_pelada_state.sql`](supabase/migrations/20261020000000_pelada_state.sql). Ele cria a tabela do estado com RLS ligado e sem acesso pelo navegador (ela guarda o nível dos jogadores e o segredo do login).
+3. Em *Project Settings → API*, copie a **Project URL**, a chave **anon** e a chave **service_role**.
+4. O Realtime (canal de broadcast `pelada`) funciona sem configuração extra.
+
+**2. Netlify**
+1. *Add new site → Import an existing project* e escolha este repositório. O `netlify.toml` já define: pasta publicada `public`, funções em `netlify/functions` e o redirecionamento de `/api/*`. Não precisa de comando de build.
+2. Em *Site configuration → Environment variables*, cadastre (veja [`.env.example`](.env.example)):
+   - `SUPABASE_URL`
+   - `SUPABASE_ANON_KEY` (pública, vai para o navegador)
+   - `SUPABASE_SERVICE_ROLE_KEY` (**secreta**: fica só na função, nunca no código nem no front-end)
+   - `ADMIN_PASSWORD` (obrigatória: sem ela a API recusa funcionar)
+3. Faça o deploy. Cada push na branch `main` publica de novo.
+
+**Como atualiza em tempo real:** cada ação do admin grava no Supabase e dispara um aviso no canal Realtime; os celulares então pedem o estado atual à API (que valida o código da pelada). Há também uma consulta a cada 10 s como garantia, e, quando o cronômetro chega a zero, o próprio celular pede o estado para pegar o fim de jogo (a API encerra a partida ao ler, já que no Netlify não existe um processo rodando o tempo todo).
+
 ## Testes
 
 ```bash
