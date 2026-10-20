@@ -1,0 +1,13 @@
+{
+  "name": "pelada-futebol",
+  "version": "1.0.0",
+  "description": "Gestão de pelada: sorteio equilibrado, fila de times, placar, gols e assistências",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "dev": "node --watch server.js",
+    "seed": "node scripts/seed.js"
+  },
+  "engines": { "node": ">=18" }
+}

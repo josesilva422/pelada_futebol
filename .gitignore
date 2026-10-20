@@ -1,0 +1,9 @@
+node_modules/
+# dados da pelada e segredo do login (gerados pelo servidor)
+data/
+.env
+.env.*
+*.log
+.DS_Store
+.netlify/
+.claude/
