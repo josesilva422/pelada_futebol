@@ -20,6 +20,19 @@ function setup() {
     !env.ADMIN_PASSWORD && 'ADMIN_PASSWORD',
   ].filter(Boolean);
   if (missing.length) throw new Error(`Variáveis de ambiente faltando no Netlify: ${missing.join(', ')}`);
+
+  // erros comuns de configuração viram mensagens claras (sem repetir o valor, que pode ser uma chave)
+  let validUrl = false;
+  try { validUrl = ['http:', 'https:'].includes(new URL(url).protocol); } catch { /* inválida */ }
+  if (!validUrl) {
+    throw new Error('SUPABASE_URL inválida: deve ser o endereço do projeto (https://<id>.supabase.co), mas o valor cadastrado não é um endereço. Parece que uma chave foi colada no campo errado.');
+  }
+  if (String(secretKey).startsWith('sb_publishable_')) {
+    throw new Error('SUPABASE_SECRET_KEY está com a chave pública (sb_publishable_...). Ali vai a Secret key (sb_secret_...).');
+  }
+  if (String(publishableKey).startsWith('sb_secret_')) {
+    throw new Error('SUPABASE_PUBLISHABLE_KEY está com a chave secreta (sb_secret_...). Ali vai a Publishable key (sb_publishable_...).');
+  }
   cached = {
     api: createApi({ adminPassword: env.ADMIN_PASSWORD, realtime: { url, anonKey: publishableKey } }),
     store: createSupabaseStore({ url, serviceKey: secretKey }),

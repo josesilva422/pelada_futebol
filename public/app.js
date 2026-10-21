@@ -123,7 +123,12 @@
   });
 
   async function fetchState() {
-    try { setState(await api('GET', `/api/state?${qs()}`)); } catch { /* tenta de novo no próximo ciclo */ }
+    try {
+      setState(await api('GET', `/api/state?${qs()}`));
+    } catch (e) {
+      // tenta de novo no próximo ciclo; se nunca carregou, mostra o motivo em vez de ficar em "Carregando…"
+      if (!state) $('#main').innerHTML = `<section class="card"><h2>⚠️ Não foi possível carregar</h2><p class="muted">${esc(e.message)}</p></section>`;
+    }
   }
 
   // Produção: o Supabase Realtime só avisa "algo mudou" e cada celular pede o estado à API (que valida o código).
