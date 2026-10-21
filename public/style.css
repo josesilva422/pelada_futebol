@@ -224,3 +224,39 @@ tr.top td:nth-child(2) { font-weight: 800; }
 .bdg.gold { border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff1a8, #e0b020 60%, #a67c00); box-shadow: 0 0 0 1px #7a5c00, 0 0 6px rgba(255, 215, 0, .55); }
 .bdg.crown { font-size: 1rem; filter: drop-shadow(0 0 3px rgba(255, 215, 0, .7)); }
 .rk-n { display: flex; align-items: center; }
+
+/* ===== topo: barra fixa com marca, ações e abas em pílula ===== */
+.topbar { position: sticky; top: 0; z-index: 10; background: linear-gradient(180deg, #0f3220, #0b2216); border-bottom: 1px solid var(--line); box-shadow: 0 8px 22px rgba(0, 0, 0, .35); }
+.top { position: static; display: block; padding: 0; background: none; border: 0; }
+.top-in { max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px 8px; }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.logo { width: 38px; height: 38px; flex: none; border-radius: 12px; display: grid; place-items: center; font-size: 1.3rem;
+  background: radial-gradient(circle at 30% 25%, #6df5a8, #1e9e55 72%); box-shadow: 0 3px 12px rgba(52, 210, 123, .4), inset 0 0 0 1px rgba(255, 255, 255, .25); }
+.brand-t { display: grid; gap: 2px; min-width: 0; }
+.top h1 { margin: 0; font-size: 1.15rem; line-height: 1.05; letter-spacing: .02em; }
+.top small { display: inline-block; margin: 0; padding: 1px 8px; width: fit-content; border-radius: 99px; background: rgba(52, 210, 123, .14); color: #7ff0ae;
+  font-size: .66rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }
+.top small:empty { display: none; }
+.top-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.top-actions .btn { border-radius: 99px; background: rgba(255, 255, 255, .06); border-color: rgba(255, 255, 255, .14); padding: 8px 14px; font-size: .9rem; }
+.top-actions .btn:hover { background: rgba(255, 255, 255, .12); }
+#sound { width: 38px; height: 38px; padding: 0; display: grid; place-items: center; font-size: 1.05rem; }
+
+.tabs { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; max-width: 736px; width: calc(100% - 24px); margin: 0 auto 10px; padding: 4px; overflow: visible;
+  background: rgba(0, 0, 0, .32); border: 1px solid var(--line); border-radius: 16px; }
+.tabs button { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 9px 8px; border: 0; border-radius: 12px; box-shadow: none;
+  background: transparent; color: var(--muted); font-weight: 700; font-size: .92rem; cursor: pointer; transition: background .15s, color .15s, transform .1s; }
+.tabs button:hover { color: var(--text); background: rgba(255, 255, 255, .06); }
+.tabs button:active { transform: scale(.97); }
+.tabs button.on { color: #04230f; background: linear-gradient(180deg, #43e68a, #27b866); box-shadow: 0 4px 14px rgba(52, 210, 123, .35), inset 0 1px 0 rgba(255, 255, 255, .35); }
+.tabs .ti { font-size: 1.05rem; line-height: 1; }
+.tabs .tl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* celular: ícone em cima do nome, para caberem as 4 abas do admin */
+@media (max-width: 520px) {
+  .top-in { padding: 8px 12px 6px; }
+  .logo { width: 34px; height: 34px; font-size: 1.15rem; }
+  .tabs { width: calc(100% - 20px); margin-bottom: 8px; }
+  .tabs button { flex-direction: column; gap: 2px; padding: 6px 2px; font-size: .7rem; }
+  .tabs .ti { font-size: 1.15rem; }
+}

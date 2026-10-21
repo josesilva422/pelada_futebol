@@ -460,10 +460,11 @@
     $('#auth').hidden = locked;
     $('#auth').textContent = isAdmin() ? '👑 Sair' : '↩ Sair';
 
-    const tabs = [['jogo', locked ? '⚽ Entrar' : '⚽ Jogo'], ['ranking', '🏆 Ranking']];
-    if (isAdmin()) tabs.push(['jogadores', '👥 Jogadores'], ['admin', '⚙️ Admin']);
+    const tabs = [['jogo', locked ? '🔑' : '⚽', locked ? 'Entrar' : 'Jogo'], ['ranking', '🏆', 'Ranking']];
+    if (isAdmin()) tabs.push(['jogadores', '👥', 'Jogadores'], ['admin', '⚙️', 'Admin']);
     if (!tabs.some(([k]) => k === tab)) tab = 'jogo';
-    $('#tabs').innerHTML = tabs.map(([k, l]) => `<button data-act="tab" data-tab="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`).join('');
+    $('#tabs').innerHTML = tabs.map(([k, icon, label]) => `<button data-act="tab" data-tab="${k}" class="${tab === k ? 'on' : ''}" ${tab === k ? 'aria-current="page"' : ''}>
+      <span class="ti">${icon}</span><span class="tl">${label}</span></button>`).join('');
 
     if (!locked && (!state.session || !Array.isArray(state.session.queue) || Array.isArray(state.session.gkQueue)) && tab !== 'ranking') {
       $('#main').innerHTML = `<section class="card"><h2>⚠️ Servidor desatualizado</h2>

@@ -3,17 +3,29 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0f2a1a">
+  <meta name="theme-color" content="#0d2a19">
   <title>Pelada</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="top">
-    <h1>⚽ Pelada <small id="season"></small></h1>
-    <div class="row"><button id="sound" class="btn ghost" data-act="sound" title="Som do apito"></button>
-      <button id="auth" class="btn ghost" data-act="auth"></button></div>
-  </header>
-  <nav id="tabs" class="tabs"></nav>
+  <div class="topbar">
+    <header class="top">
+      <div class="top-in">
+        <div class="brand">
+          <span class="logo" aria-hidden="true">⚽</span>
+          <div class="brand-t">
+            <h1>Pelada</h1>
+            <small id="season"></small>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button id="sound" class="btn ghost" data-act="sound" title="Som do apito"></button>
+          <button id="auth" class="btn ghost" data-act="auth"></button>
+        </div>
+      </div>
+    </header>
+    <nav id="tabs" class="tabs" aria-label="Seções"></nav>
+  </div>
   <main id="main"><p class="muted center">Carregando…</p></main>
   <div id="modal" class="modal" hidden></div>
   <div id="toast" class="toast" hidden></div>
