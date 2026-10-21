@@ -8,6 +8,6 @@ create table if not exists public.pelada_state (
 );
 
 -- A tabela guarda o nível dos jogadores e o segredo do login do admin, então NINGUÉM lê pelo navegador:
--- RLS ligado e nenhuma policy. Só a função do Netlify acessa, com a chave service_role (que ignora o RLS).
+-- RLS ligado e nenhuma policy. Só a função do Netlify acessa, com a Secret key / service_role (que ignora o RLS).
 alter table public.pelada_state enable row level security;
 revoke all on public.pelada_state from anon, authenticated;

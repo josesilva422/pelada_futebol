@@ -6,7 +6,12 @@ const L = require('./logic');
 
 function createSupabaseStore({ url, serviceKey, fetchImpl = fetch }) {
   const base = String(url).replace(/\/$/, '');
-  const headers = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, 'Content-Type': 'application/json' };
+  // chaves novas (sb_secret_...) não são JWT e vão só em "apikey"; as antigas (service_role, JWT) também em Authorization
+  const headers = {
+    apikey: serviceKey,
+    ...(String(serviceKey).startsWith('sb_') ? {} : { Authorization: `Bearer ${serviceKey}` }),
+    'Content-Type': 'application/json',
+  };
 
   async function rest(path, { method = 'GET', prefer, body } = {}) {
     const res = await fetchImpl(base + path, {

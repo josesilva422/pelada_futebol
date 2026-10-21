@@ -57,15 +57,18 @@ celular ──► Netlify (public/ = site)         ┌────────�
 **1. Supabase**
 1. Crie o projeto em supabase.com.
 2. Em *SQL Editor*, rode o conteúdo de [`supabase/migrations/20261020000000_pelada_state.sql`](supabase/migrations/20261020000000_pelada_state.sql). Ele cria a tabela do estado com RLS ligado e sem acesso pelo navegador (ela guarda o nível dos jogadores e o segredo do login).
-3. Em *Project Settings → API*, copie a **Project URL**, a chave **anon** e a chave **service_role**.
+3. Pegue 3 valores:
+   - **Project URL**: em *Project Settings → Data API*. Se não achar, ela é `https://<Reference ID>.supabase.co`, com o *Reference ID* em *Project Settings → General*.
+   - **Publishable key** (`sb_publishable_...`): em *Project Settings → API Keys*.
+   - **Secret key** (`sb_secret_...`): na mesma tela, na aba **Secret keys** (clique em *New secret key* se não houver nenhuma). Projetos antigos podem ter as chaves *anon* e *service_role* na aba *Legacy API Keys*; elas também funcionam.
 4. O Realtime (canal de broadcast `pelada`) funciona sem configuração extra.
 
 **2. Netlify**
 1. *Add new site → Import an existing project* e escolha este repositório. O `netlify.toml` já define: pasta publicada `public`, funções em `netlify/functions` e o redirecionamento de `/api/*`. Não precisa de comando de build.
 2. Em *Site configuration → Environment variables*, cadastre (veja [`.env.example`](.env.example)):
    - `SUPABASE_URL`
-   - `SUPABASE_ANON_KEY` (pública, vai para o navegador)
-   - `SUPABASE_SERVICE_ROLE_KEY` (**secreta**: fica só na função, nunca no código nem no front-end)
+   - `SUPABASE_PUBLISHABLE_KEY` (pública, vai para o navegador)
+   - `SUPABASE_SECRET_KEY` (**secreta**: fica só na função, nunca no código nem no front-end)
    - `ADMIN_PASSWORD` (obrigatória: sem ela a API recusa funcionar)
 3. Faça o deploy. Cada push na branch `main` publica de novo.
 
