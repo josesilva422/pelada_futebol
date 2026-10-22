@@ -1,5 +1,7 @@
 # Pelada – gestão de futebol
 
+> 📘 **Documentação técnica** (arquitetura, modelo de dados, regras, API, segurança, deploy e testes): [`docs/DOCUMENTACAO_TECNICA.md`](docs/DOCUMENTACAO_TECNICA.md)
+
 Sistema web sem dependências (só Node 18+). Dois perfis:
 
 - **Espectador**: abre o portal e digita o **código da pelada**. Vê placar, tempo, times, fila e rankings em tempo real. Não vê o nível dos jogadores.
