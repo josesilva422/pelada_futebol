@@ -413,7 +413,11 @@ function nextMatch(db, now, winnerTeamId) {
   if (!winner && (tiebreak || needsBothOut(db))) throw new AppError('Empate: defina qual time ganhou');
   const stay = winner || a;
   const leave = stay === a ? b : a;
-  const snap = (t) => ({ id: t.id, name: t.name, color: t.color, players: t.players.map((id) => (playerById(db, id) || {}).name).filter(Boolean) });
+  // players (nomes) e playerIds andam juntos, na mesma ordem: o ranking usa os ids para contar jogos e vitórias
+  const snap = (t) => {
+    const named = t.players.map((id) => [id, (playerById(db, id) || {}).name]).filter(([, name]) => name);
+    return { id: t.id, name: t.name, color: t.color, players: named.map(([, name]) => name), playerIds: named.map(([id]) => id) };
+  };
 
   s.lastResult = {
     id: s.match.id, sessionId: s.id, endedAt: now, reason: s.match.reason, season: db.season,
@@ -476,17 +480,38 @@ function resetSeason(db) {
 
 // ---------- estado publico ----------
 
+// quem jogou cada partida da temporada e se venceu (pelo placar: o empate que o admin desempata não conta como vitória)
+function appearances(db) {
+  const out = [];
+  db.matches.forEach((m) => {
+    if (!m.teamA || !m.teamB) return;
+    [[m.teamA, m.scoreA, m.scoreB], [m.teamB, m.scoreB, m.scoreA]].forEach(([team, mine, theirs]) => {
+      // partidas gravadas antes de existir playerIds: acha o jogador pelo nome (únicos no cadastro)
+      const people = team.playerIds
+        ? team.playerIds.map((id, i) => ({ id, name: team.players[i] }))
+        : team.players.map((name) => ({ id: (db.players.find((p) => p.name === name) || {}).id, name })).filter((p) => p.id);
+      people.forEach((p) => out.push({ ...p, win: mine > theirs }));
+    });
+  });
+  return out;
+}
+
 function ranking(db) {
   const map = new Map();
-  const row = (id, name) => {
-    if (!map.has(id)) map.set(id, { id, name, goals: 0, assists: 0 });
-    return map.get(id);
-  };
   // nome atual do cadastro; a cópia gravada no gol só vale se o jogador foi excluído
   const nameOf = (id, saved) => (playerById(db, id) || {}).name || saved;
+  const row = (id, saved) => {
+    if (!map.has(id)) map.set(id, { id, name: nameOf(id, saved), goals: 0, assists: 0, games: 0, wins: 0 });
+    return map.get(id);
+  };
   db.events.forEach((e) => {
-    row(e.scorerId, nameOf(e.scorerId, e.scorerName)).goals++;
-    if (e.assistId) row(e.assistId, nameOf(e.assistId, e.assistName)).assists++;
+    row(e.scorerId, e.scorerName).goals++;
+    if (e.assistId) row(e.assistId, e.assistName).assists++;
+  });
+  appearances(db).forEach((a) => {
+    const r = row(a.id, a.name);
+    r.games++;
+    if (a.win) r.wins++;
   });
   return [...map.values()];
 }

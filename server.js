@@ -43,14 +43,22 @@ const store = {
   },
 };
 
-const api = createApi({ adminPassword: ADMIN_PASSWORD, realtime: null }); // realtime null: o navegador usa SSE
+// endereços na rede local, os mais comuns de Wi-Fi/roteador primeiro (192.168.x.x, depois 10.x.x.x, depois 172.16-31.x.x)
+const lanRank = (ip) => (ip.startsWith('192.168.') ? 0 : ip.startsWith('10.') ? 1 : /^172\.(1[6-9]|2\d|3[01])\./.test(ip) ? 2 : 3);
+const lanUrls = Object.values(os.networkInterfaces()).flat()
+  .filter((i) => i.family === 'IPv4' && !i.internal && !i.address.startsWith('169.254.'))
+  .map((i) => i.address)
+  .sort((a, b) => lanRank(a) - lanRank(b))
+  .map((ip) => `http://${ip}:${PORT}`);
+
+const api = createApi({ adminPassword: ADMIN_PASSWORD, realtime: null, lanUrls }); // realtime null: o navegador usa SSE
 
 setInterval(() => api.tick(store).catch(console.error), 500); // encerra a partida quando o tempo acaba
 setInterval(() => clients.forEach((who, res) => res.write(': ping\n\n')), 20000);
 
 // ---------- http ----------
 
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 
 function send(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -107,8 +115,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Pelada rodando em http://localhost:${PORT}`);
-  Object.values(os.networkInterfaces()).flat()
-    .filter((i) => i.family === 'IPv4' && !i.internal)
-    .forEach((i) => console.log(`  na rede local: http://${i.address}:${PORT}`));
+  lanUrls.forEach((url) => console.log(`  na rede local: ${url}`));
   if (!process.env.ADMIN_PASSWORD) console.log('Senha do admin: "admin123" (troque com a variável ADMIN_PASSWORD)');
 });

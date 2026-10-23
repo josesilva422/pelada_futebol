@@ -356,3 +356,44 @@ test('pelada guardada antes de existir o id da pelada ganha um id ao carregar', 
   assert.ok(L.normalizeDb(db).session.id);
   assert.equal(L.normalizeDb(L.defaultDb()).session.id, null); // sem pelada, sem id
 });
+
+test('ranking traz jogos e vitórias: vitória só pelo placar, empate desempatado não conta, quem esperou não joga', () => {
+  const db = started(5);
+  const [a, b] = db.session.teams;
+  const waiting = db.session.queue.slice();
+  const rank = (id) => L.viewState(db, 1, { admin: true }).ranking.find((r) => r.id === id);
+
+  // partida 1: o time a vence por 2 x 0
+  L.recordGoal(db, { teamId: a.id, scorerId: a.players[0] }, 2000);
+  L.recordGoal(db, { teamId: a.id, scorerId: a.players[1], assistId: a.players[0] }, 3000);
+  L.nextMatch(db, 4000);
+  a.players.forEach((id) => assert.deepEqual([rank(id).games, rank(id).wins], [1, 1]));
+  b.players.forEach((id) => assert.deepEqual([rank(id).games, rank(id).wins], [1, 0]));
+  assert.equal(rank(a.players[0]).goals, 1);
+  waiting.forEach((id) => assert.equal(rank(id), undefined)); // ainda não entraram em campo
+
+  // partida 2: 0 x 0 e o admin define que o time a segue; o empate não vira vitória
+  const [stay, challenger] = db.session.teams;
+  assert.equal(stay.id, a.id);
+  L.startMatch(db, 5000);
+  L.finishMatch(db, 'manual', 6000);
+  L.nextMatch(db, 7000, a.id);
+  a.players.forEach((id) => assert.deepEqual([rank(id).games, rank(id).wins], [2, 1]));
+  challenger.players.forEach((id) => assert.deepEqual([rank(id).games, rank(id).wins], [1, 0]));
+
+  // partidas antigas (sem playerIds) são achadas pelo nome
+  const legacy = JSON.parse(JSON.stringify(db));
+  legacy.matches.forEach((m) => { delete m.teamA.playerIds; delete m.teamB.playerIds; });
+  assert.deepEqual(L.viewState(legacy, 1, { admin: true }).ranking, L.viewState(db, 1, { admin: true }).ranking);
+
+  // quem teve o cadastro excluído continua com o nome gravado na partida
+  const gone = a.players[2];
+  const goneName = db.players.find((p) => p.id === gone).name;
+  L.deletePlayer(db, gone);
+  assert.equal(rank(gone).name, goneName);
+  assert.equal(rank(gone).games, 2);
+
+  // nova temporada zera tudo
+  L.resetSeason(db);
+  assert.equal(L.viewState(db, 1, { admin: true }).ranking.length, 0);
+});

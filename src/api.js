@@ -62,8 +62,9 @@ function recordLoginFailure(guard, ip, now) {
   if (keys.length > LOGIN_MAX_ENTRIES) keys.sort((a, b) => guard[a].last - guard[b].last).slice(0, keys.length - LOGIN_MAX_ENTRIES).forEach((k) => delete guard[k]);
 }
 
-// adminPassword: senha do admin. realtime: { url, anonKey } do Supabase (ou null para usar SSE local)
-function createApi({ adminPassword, realtime = null }) {
+// adminPassword: senha do admin. realtime: { url, anonKey } do Supabase (ou null para usar SSE local).
+// lanUrls: endereços do servidor na rede local (só no servidor local), usados no link de convite do admin.
+function createApi({ adminPassword, realtime = null, lanUrls = [] }) {
   const adminToken = (db) => crypto.createHmac('sha256', db.secret).update('admin:' + adminPassword).digest('hex');
   // o EventSource do navegador não envia cabeçalhos, então aceitamos também ?token=
   const tokenOf = (req) => (req.headers.authorization || '').replace(/^Bearer\s+/i, '') || req.query.get('token') || '';
@@ -93,7 +94,7 @@ function createApi({ adminPassword, realtime = null }) {
     const code = req.query.get('code');
     const ok = (body) => ({ status: 200, body });
     try {
-      if (method === 'GET' && pathname === '/api/config') return ok({ realtime });
+      if (method === 'GET' && pathname === '/api/config') return ok({ realtime, lanUrls });
 
       if (method === 'GET' && (pathname === '/api/state' || pathname === '/api/me')) {
         const { db } = await mutate(store, tickOnly(now));

@@ -40,9 +40,22 @@ Depois de 5 senhas erradas seguidas, o login daquele endereço fica bloqueado po
 8. **Partida**: botão **Iniciar partida**; 7 minutos (com pausa) ou 2 gols. Com até 7 esperando, o vencedor fica, o perdedor vai para o fim da fila e os 5 primeiros da fila entram. Quem vence (por 1 ou mais gols) sempre fica em campo. Só no **empate com 8 ou mais esperando os dois times saem**: entram o próximo time e o time de ré (completado, se preciso, por quem acabou de sair); o admin define qual time ganhou: ele entra na fila logo depois do último que esperava, na ordem em que estava, e o outro time vem depois dele.
 9. **Empate**: sai o time desafiante. Exceção: se o próximo time está completo e o time de ré tem até 3 jogadores, o admin **define quem ganhou**; o time que perde vai para o fim da fila e seus primeiros jogadores completam o time de ré. Fora dessa exceção o admin também pode escolher o vencedor.
 10. **Gols**: botão ⚽ do time → toque em quem fez o gol → toque em quem deu a assistência (ou "Sem assistência"). ↶ desfaz um gol. Duplo toque não conta o gol duas vezes. Os placares das partidas já jogadas aparecem em **Resultados de hoje**, na aba Jogo.
-11. **Ranking** (público, não precisa de código): menu com Gols, Assistências e Participações (gols + assistências). Selos: ⚽ bola de ouro (mais gols), 👟 chuteira de ouro (mais assistências) e 👑 coroa (mais participações), que aparecem na frente do nome. O ranking é só da temporada atual: "Começar nova temporada" (aba Admin) apaga gols, assistências e partidas, sem guardar histórico. Só os jogadores cadastrados e as regras da partida permanecem.
+11. **Ranking** (público, não precisa de código): menu com Gols, Assistências, Participações (gols + assistências), Vitórias e Jogos. Cada cartão mostra gols, assistências, jogos e vitórias (e o aproveitamento, na aba Vitórias). Vitória é pelo placar: o empate que o organizador desempata não conta. Selos: ⚽ bola de ouro (mais gols), 👟 chuteira de ouro (mais assistências) e 👑 coroa (mais participações), que aparecem na frente do nome. O ranking é só da temporada atual: "Começar nova temporada" (aba Admin) apaga gols, assistências e partidas, sem guardar histórico. Só os jogadores cadastrados e as regras da partida permanecem.
 
 Regras (duração, gols, jogadores por time) ficam em Admin > Regras da partida.
+
+## Convidar os jogadores
+
+Com a pelada iniciada, o botão **📲 Convidar** (ao lado do código, na aba Jogo) mostra um **QR code** e um **link** (`.../?c=CODIGO`). Quem aponta a câmera do celular, ou abre o link mandado no WhatsApp, entra direto na pelada, sem digitar o código. O modal tem ainda os botões Compartilhar, WhatsApp, Copiar link e Copiar código.
+
+Rodando local (`npm start`), o link usa o endereço da rede (Wi-Fi) que o terminal mostra, então só funciona para quem está no mesmo Wi-Fi do servidor. Se o convite avisar que o endereço só funciona neste computador, abra o sistema pelo endereço da rede.
+
+## No celular
+
+- Durante a partida (rolando ou pausada) a tela **não apaga**, quando o navegador permite (precisa de https; no Wi-Fi local por http não funciona).
+- Ao voltar para o site depois de usar outro app, o placar se atualiza na hora.
+- Dá para **adicionar à tela inicial** (menu do navegador): o site abre como um app, com ícone próprio. No iPhone, o app instalado não divide o login nem o código com o Safari; abra o link de convite de novo.
+- Ao mandar o link no WhatsApp, a prévia mostra o título e a imagem do site.
 
 ## Som
 
@@ -68,7 +81,7 @@ celular ──► Netlify (public/ = site)         ┌────────�
 4. O Realtime (canal de broadcast `pelada`) funciona sem configuração extra.
 
 **2. Netlify**
-1. *Add new site → Import an existing project* e escolha este repositório. O `netlify.toml` já define: pasta publicada `public`, funções em `netlify/functions` e o redirecionamento de `/api/*`. Não precisa de comando de build.
+1. *Add new site → Import an existing project* e escolha este repositório. O `netlify.toml` já define: pasta publicada `public`, funções em `netlify/functions` e o redirecionamento de `/api/*`. O comando de build (`node scripts/set-site-url.js`) também já está lá: ele só completa o endereço da imagem de pré-visualização do link.
 2. Em *Site configuration → Environment variables*, cadastre (veja [`.env.example`](.env.example)):
    - `SUPABASE_URL`
    - `SUPABASE_PUBLISHABLE_KEY` (pública, vai para o navegador)

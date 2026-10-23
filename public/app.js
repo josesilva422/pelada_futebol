@@ -9,6 +9,15 @@
     return '';
   };
 
+  // link de convite (?c=CODE): guarda o código e limpa o endereço, para o espectador entrar direto na pelada
+  (() => {
+    const param = new URLSearchParams(location.search).get('c');
+    if (param === null) return;
+    const invited = param.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
+    if (invited) keep(CODE_KEY, invited);
+    try { history.replaceState(null, '', location.pathname); } catch { /* ignora */ }
+  })();
+
   let state = null;
   let lastKey = '';
   let offset = 0; // relogio do servidor - relogio local
@@ -16,6 +25,7 @@
   let code = keep(CODE_KEY);
   let source = null; // SSE (servidor local)
   let realtimeCfg; // undefined: ainda não carregou; null: sem Supabase (usa SSE); senão { url, anonKey }
+  let lanUrls = []; // endereços do servidor na rede local (servidor local), para o link de convite
   let channel = null; // canal Realtime do Supabase
   let lastEndFetch = 0;
   let tab = 'jogo';
@@ -57,8 +67,10 @@
     osc.stop(t0 + dur); lfo.stop(t0 + dur);
   }
 
+  let quietUntil = 0; // depois de ficar muito tempo fora da aba, o que aconteceu nesse tempo não toca apito atrasado
+
   function playSound(kind) {
-    if (!soundOn) return;
+    if (!soundOn || Date.now() < quietUntil) return;
     const ctx = audio();
     if (!ctx) return;
     const t = ctx.currentTime + 0.05;
@@ -128,6 +140,7 @@
     lastKey = key;
     state = s;
     render();
+    syncWakeLock();
   }
 
   const loadScript = (src) => new Promise((resolve, reject) => {
@@ -151,7 +164,11 @@
   // Servidor local: SSE. Nos dois casos há polling de segurança.
   async function connect() {
     if (realtimeCfg === undefined) {
-      try { realtimeCfg = (await api('GET', '/api/config')).realtime || null; } catch { realtimeCfg = null; }
+      try {
+        const cfg = await api('GET', '/api/config');
+        realtimeCfg = cfg.realtime || null;
+        lanUrls = cfg.lanUrls || [];
+      } catch { realtimeCfg = null; }
     }
     if (!realtimeCfg) {
       if (source) source.close();
@@ -173,6 +190,51 @@
   }
 
   setInterval(() => { if (realtimeCfg) fetchState(); }, 10000);
+
+  // ---------- tela ligada durante a partida e atualização ao voltar para a aba ----------
+
+  let wakeLock = null;
+  let wakeBusy = false;
+  let wakeDirty = false;
+
+  // com a partida rolando ou pausada e a aba à vista, pede para a tela não apagar (precisa de https ou localhost;
+  // em outro caso, ou se o aparelho negar, segue sem)
+  async function syncWakeLock() {
+    if (!navigator.wakeLock) return;
+    if (wakeBusy) { wakeDirty = true; return; }
+    wakeBusy = true;
+    const m = state && state.session && state.session.match;
+    const want = !!m && (m.status === 'running' || m.status === 'paused') && document.visibilityState === 'visible';
+    try {
+      if (want && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; }); // o navegador solta ao esconder a aba
+      } else if (!want && wakeLock) {
+        const lock = wakeLock;
+        wakeLock = null;
+        await lock.release();
+      }
+    } catch { wakeLock = null; }
+    wakeBusy = false;
+    if (wakeDirty) { wakeDirty = false; syncWakeLock(); }
+  }
+
+  // ao voltar para a aba (ou a rede voltar) o celular pede o estado na hora, em vez de esperar o próximo ciclo
+  let hiddenAt = 0;
+  let lastReturn = 0;
+  function onReturn() {
+    if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+    const now = Date.now();
+    if (now - lastReturn < 1000) return; // visibilitychange, online e pageshow podem vir juntos
+    lastReturn = now;
+    if (hiddenAt && now - hiddenAt > 15000) quietUntil = now + 5000;
+    hiddenAt = 0;
+    fetchState();
+    syncWakeLock();
+  }
+  document.addEventListener('visibilitychange', onReturn);
+  window.addEventListener('online', onReturn);
+  window.addEventListener('pageshow', (e) => { if (e.persisted) onReturn(); });
 
   function logout() {
     token = ''; code = '';
@@ -255,7 +317,7 @@
 
   function codeBanner() {
     return isAdmin() ? `<div class="card row spread"><div><div class="muted">Código para os espectadores</div><div class="code">${esc(state.session.code || '—')}</div></div>
-      <button class="btn sm" data-act="copycode">Copiar</button></div>` : '';
+      <button class="btn" data-act="invite">📲 Convidar</button></div>` : '';
   }
 
   function viewLobby() {
@@ -416,19 +478,27 @@
         ${s.matchesPlayed === 0 && s.match.status === 'idle' ? '<button class="btn" data-act="redraw">🔄 Refazer sorteio</button>' : ''}</div>` : ''}`;
   }
 
-  const RANKS = { goals: ['⚽ Gols', 'goals'], assists: ['🅰 Assist.', 'assists'], part: ['🔥 Particip.', 'part'] };
+  const RANKS = { goals: ['⚽ Gols'], assists: ['🅰 Assist.'], part: ['🔥 Particip.'], wins: ['🏆 Vitórias'], games: ['🏟 Jogos'] };
 
   function viewRanking() {
     const rows = state.ranking
-      .map((r) => ({ ...r, part: r.goals + r.assists }))
+      .map((r) => ({ ...r, part: r.goals + r.assists, rate: r.games ? r.wins / r.games : 0 }))
       .filter((r) => r[rankBy] > 0)
-      .sort((x, y) => y[rankBy] - x[rankBy] || y.goals - x.goals || y.assists - x.assists || x.name.localeCompare(y.name, 'pt-BR'));
+      .sort((x, y) => y[rankBy] - x[rankBy] || (rankBy === 'wins' ? y.rate - x.rate : 0) || y.goals - x.goals || y.assists - x.assists
+        || y.wins - x.wins || x.name.localeCompare(y.name, 'pt-BR'));
     const medal = (i) => ['🥇', '🥈', '🥉'][i] || i + 1;
     const items = rows.map((r, i) => `<li class="rk-row ${i < 3 ? 'top' + (i + 1) : ''}">
       <span class="rk-pos">${medal(i)}</span>
-      <span class="rk-name"><span class="rk-n">${badges(r.id)}${esc(r.name)}</span><small>⚽ ${r.goals} gol${r.goals === 1 ? '' : 's'} · 🅰 ${r.assists} assist.</small></span>
+      <span class="rk-name"><span class="rk-n">${badges(r.id)}${esc(r.name)}</span><small>⚽ ${r.goals} gol${r.goals === 1 ? '' : 's'} · 🅰 ${r.assists} assist.</small>
+        <small>🏟 ${r.games} jogo${r.games === 1 ? '' : 's'} · 🏆 ${r.wins} vit.${rankBy === 'wins' ? ` (${Math.round(r.rate * 100)}%)` : ''}</small></span>
       <span class="rk-val">${r[rankBy]}</span></li>`).join('');
-    const hint = { goals: 'Total de gols na temporada.', assists: 'Total de assistências na temporada.', part: 'Participações = gols + assistências.' }[rankBy];
+    const hint = {
+      goals: 'Total de gols na temporada.',
+      assists: 'Total de assistências na temporada.',
+      part: 'Participações = gols + assistências.',
+      wins: 'Vitórias pelo placar (empate desempatado pelo organizador não conta). Entre parênteses, o aproveitamento.',
+      games: 'Partidas disputadas na temporada.',
+    }[rankBy];
     return `<section class="card"><h2>🏆 Ranking · temporada ${state.season}</h2>
       <div class="seg">${Object.entries(RANKS).map(([k, [l2]]) => `<button data-act="rank" data-by="${k}" class="${rankBy === k ? 'on' : ''}">${l2}</button>`).join('')}</div>
       ${rows.length ? `<ol class="rk">${items}</ol><p class="muted" style="margin:10px 0 0;font-size:.8rem">${hint}</p>
@@ -617,6 +687,60 @@
     };
   }
 
+  // ---------- convite: link e QR code ----------
+
+  const isLocalHost = (h) => ['localhost', '127.0.0.1', '[::1]'].includes(h);
+
+  // no servidor local o admin costuma abrir por localhost, que não funciona no celular dos outros:
+  // usa o endereço da rede (Wi-Fi) que o servidor informou
+  function inviteLink() {
+    const base = isLocalHost(location.hostname) && lanUrls.length ? lanUrls[0] : location.origin;
+    return `${base}/?c=${encodeURIComponent(state.session.code)}`;
+  }
+
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+    } catch { /* tenta o método antigo */ }
+    const ta = document.createElement('textarea'); // http na rede local não libera navigator.clipboard
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { /* ignora */ }
+    ta.remove();
+    return ok;
+  }
+
+  function inviteModal() {
+    const link = inviteLink();
+    const text = `⚽ Pelada de hoje! Acompanhe o placar ao vivo: ${link}`;
+    const onlyHere = isLocalHost(location.hostname) && !lanUrls.length;
+    const qr = typeof QR !== 'undefined' ? QR.svg(link) : '';
+    const sheet = openModal(`<h3>Convidar para acompanhar</h3>
+      ${qr ? `<div class="qr">${qr}</div>` : ''}
+      <p class="muted center">Aponte a câmera do celular para o QR code ou mande o link. Quem abrir entra direto, sem digitar o código.</p>
+      ${onlyHere ? '<div class="banner">Este endereço só funciona neste computador. Abra o sistema pelo endereço da rede que aparece no terminal para o link valer no celular dos outros.</div>' : ''}
+      <input class="search" id="invlink" readonly value="${esc(link)}" aria-label="Link de convite">
+      <div class="row wrap" style="margin:10px 0">
+        ${navigator.share ? '<button class="btn primary grow" id="invshare">Compartilhar</button>' : ''}
+        <a class="btn grow" id="invwa" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(text)}">WhatsApp</a>
+        <button class="btn grow" id="invcopy">Copiar link</button></div>
+      <div class="row spread" style="margin-bottom:10px"><span class="muted">Código: <b>${esc(state.session.code)}</b></span><button class="btn sm" data-act="copycode">Copiar código</button></div>
+      <button class="btn" style="width:100%" data-act="close">Fechar</button>`);
+    const input = $('#invlink', sheet);
+    input.onfocus = () => input.select();
+    $('#invcopy', sheet).onclick = async () => {
+      const ok = await copyText(link);
+      input.select();
+      toast(ok ? 'Link copiado' : 'Não deu para copiar: o link está selecionado, copie manualmente', !ok);
+    };
+    const share = $('#invshare', sheet);
+    if (share) share.onclick = () => navigator.share({ title: 'Pelada', text: '⚽ Pelada de hoje! Acompanhe o placar ao vivo.', url: link }).catch(() => {});
+  }
+
   // ---------- eventos ----------
 
   const pname = (el) => (player(el.dataset.id) || {}).name || 'jogador';
@@ -634,7 +758,8 @@
     rank: (el) => { rankBy = el.dataset.by; render(); },
     startpelada: () => post('/api/session/start'),
     endpelada: async () => { if (await ask('Encerrar a pelada? Os times e o código serão apagados.', 'Encerrar')) post('/api/session/end'); },
-    copycode: () => { navigator.clipboard?.writeText(state.session.code).then(() => toast('Código copiado'), () => toast(state.session.code)); },
+    invite: inviteModal,
+    copycode: async () => { toast(await copyText(state.session.code) ? 'Código copiado' : `Código: ${state.session.code}`); },
     arrive: arriveModal,
     checkin: async (el) => {
       const ok = await post('/api/session/checkin', { playerId: el.dataset.id });

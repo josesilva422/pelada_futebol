@@ -100,9 +100,12 @@ Há duas implementações: o armazenamento em arquivo dentro de `server.js` e `s
 ```text
 .
 ├── public/                       Front-end estático (publicado pelo Netlify)
-│   ├── index.html                  Casca da página (topo, abas, modal, toast)
+│   ├── index.html                  Casca da página (topo, abas, modal, toast) e tags de pré-visualização do link
 │   ├── style.css                   Estilos (mobile first, tema escuro)
-│   └── app.js                      Toda a interface e a comunicação com a API
+│   ├── app.js                      Toda a interface e a comunicação com a API
+│   ├── qr.js                       Gerador de QR code (sem dependências) usado no convite
+│   ├── manifest.webmanifest        Dados para instalar na tela inicial
+│   └── icon.svg, icon-192/512.png, apple-touch-icon.png, favicon.ico, og-image.png   Ícones e imagem do link
 ├── src/
 │   ├── logic.js                    Regras de negócio (funções puras sobre o objeto db)
 │   ├── api.js                      Rotas, autenticação, controle de concorrência
@@ -112,6 +115,8 @@ Há duas implementações: o armazenamento em arquivo dentro de `server.js` e `s
 ├── netlify.toml                  Publicação, funções e redirecionamento /api/*
 ├── supabase/migrations/          SQL da tabela do estado (com RLS)
 ├── scripts/seed.js               Cadastra 25 jogadores de exemplo
+├── scripts/make-icons.js         Gera os ícones e a og-image (rodar só se o desenho mudar)
+├── scripts/set-site-url.js       No deploy, completa o endereço da og-image (build.command do Netlify)
 ├── test/                         Testes automatizados (node:test)
 ├── docs/                         Esta documentação
 ├── .env.example                  Modelo das variáveis de ambiente
@@ -196,7 +201,7 @@ Cores: **laranja** (`#f2994a`) e **verde** (`#27ae60`). Um time novo sempre rece
 
 `rid` é o `requestId` do pedido que registrou o gol (veja a idempotência em 5.5).
 
-**MatchResult** (`matches[]` e `session.lastResult`): `{ id, sessionId, endedAt, reason, season, teamA, teamB, scoreA, scoreB, winner, goals }`, com `teamA`/`teamB` como `{ id, name, color, players: [nomes] }`.
+**MatchResult** (`matches[]` e `session.lastResult`): `{ id, sessionId, endedAt, reason, season, teamA, teamB, scoreA, scoreB, winner, goals }`, com `teamA`/`teamB` como `{ id, name, color, players: [nomes], playerIds: [ids] }`. `players` e `playerIds` têm a mesma ordem; os ids são a base dos jogos e vitórias do ranking. Partidas gravadas antes de existir `playerIds` são resolvidas pelo nome (únicos no cadastro).
 
 ### 4.3 Tabela no Supabase
 
@@ -297,8 +302,9 @@ A cada fim de jogo confirmado a partida é registrada em `db.matches` e em `sess
 
 ### 5.7 Ranking e selos
 
-- Calculado **na hora** a partir de `db.events`: por jogador, `goals` e `assists`; **participações = gols + assistências**.
-- Três visões: Gols, Assistências e Participações (empates desempatam por gols, depois assistências, depois nome).
+- Calculado **na hora** a partir de `db.events` e `db.matches`: por jogador, `goals`, `assists`, `games` (partidas disputadas) e `wins` (vitórias); **participações = gols + assistências**.
+- **Vitória** é pelo placar: o time com mais gols. O empate que o admin desempata (para decidir quem fica) **não** conta como vitória. Só entra em `games` quem estava no time quando a partida foi confirmada em "Próxima partida"; quem só esperou na fila não ganha jogo.
+- Cinco visões: Gols, Assistências, Participações, Vitórias e Jogos. Empates desempatam por gols, depois assistências, depois vitórias e nome (em Vitórias, primeiro pelo aproveitamento, `wins / games`). Cada cartão mostra gols, assistências, jogos e vitórias.
 - **Selos** (calculados no front): ⚽ dourado = mais gols (bola de ouro), 👟 dourado = mais assistências (chuteira de ouro), 👑 = mais participações. Em caso de empate no topo, todos os empatados recebem o selo.
 - "Começar nova temporada" apaga `events`, `matches` e `lastResult`, e incrementa `season`. Cadastro de jogadores e regras permanecem.
 
@@ -328,7 +334,7 @@ Espectadores não têm token: informam o código em `?code=XXXXX`.
 
 | Método e rota | Resposta |
 |---|---|
-| `GET /api/config` | `{ "realtime": { "url", "anonKey" } }` em produção; `{ "realtime": null }` no modo local (o front usa SSE). |
+| `GET /api/config` | `{ "realtime": { "url", "anonKey" }, "lanUrls": [] }` em produção; `{ "realtime": null, "lanUrls": ["http://192.168.0.10:3333"] }` no modo local (o front usa SSE; `lanUrls` são os endereços do servidor na rede, do mais comum de Wi-Fi para o menos, e servem ao link de convite). |
 | `GET /api/state?code=…` | Estado visível para quem pergunta (veja 6.4). Também encerra a partida se o tempo acabou. |
 | `GET /api/me` | `{ "admin": true|false }` |
 | `GET /api/stream` | **Só no modo local.** SSE; manda o estado a cada mudança. Aceita `?code=` e `?token=`. |
@@ -365,7 +371,7 @@ Para o **admin**, ou para o espectador com **código válido**:
   "now": 1792536448222,            // relógio do servidor (o front calcula o offset)
   "admin": true,
   "season": 1,
-  "ranking": [ { "id", "name", "goals", "assists" } ],
+  "ranking": [ { "id", "name", "goals", "assists", "games", "wins" } ],
   "config": { "matchSeconds", "goalsToWin", "teamSize" },
   "players": [ ... ],              // admin: com "level"; espectador: só id, name, position
   "session": {
@@ -444,7 +450,11 @@ Aplicação de página única em JavaScript puro (sem framework nem build), em `
 - **Resultados de hoje** (aba Jogo, abaixo da fila): placar de cada partida da pelada, com cores dos times, vencedor em destaque, motivo do fim e quem fez cada gol (e a assistência).
 - **Abas:** Jogo (ou Entrar, para quem não tem código), Ranking e, para o admin, Jogadores e Admin.
 - **Jogo:** painel "em campo" (placar estilo TV, gols/assistências, escalações) separado visualmente da "fila de espera" (blocos de `teamSize`: próximo time, time de ré…).
-- **Ranking:** menu Gols/Assistências/Participações com cartões e selos.
+- **Ranking:** menu Gols/Assistências/Participações/Vitórias/Jogos (em duas linhas no celular), com cartões e selos.
+- **Convite** (botão "📲 Convidar" ao lado do código, só admin): abre um modal com o **QR code**, o link `<endereço>/?c=CODIGO`, "Compartilhar" (`navigator.share`, quando existe), WhatsApp (`wa.me`), "Copiar link" e "Copiar código". Ao abrir um link com `?c=`, o app guarda o código (só letras e números, até 10), limpa o endereço e entra direto na pelada; link velho cai na mensagem "Código inválido ou pelada encerrada". No servidor local, quem abre por `localhost` recebe no link o endereço da rede (`lanUrls[0]`), pois `localhost` não funciona no celular dos outros; sem endereço de rede o modal avisa. `copyText()` cai para `execCommand('copy')` onde `navigator.clipboard` não existe (http na rede local). O QR vem de `public/qr.js` (modo byte, correção de erro M, versões 1 a 10, até 213 bytes).
+- **Tela ligada:** com a partida rodando ou pausada e a aba à vista, o app pede `navigator.wakeLock` (precisa de https ou localhost; sem isso, ou se o aparelho negar, segue normal) e solta quando a partida acaba. O navegador solta sozinho ao esconder a aba; ao voltar o app pede de novo.
+- **Ao voltar para a aba** (`visibilitychange`, `online`, `pageshow` vindo do cache), o app pede o estado na hora, em vez de esperar o ciclo de 10 s. Se ficou mais de 15 s fora, o que aconteceu nesse tempo não toca apito atrasado (silêncio por 5 s depois da volta).
+- **Instalação e pré-visualização:** `manifest.webmanifest` (standalone, tema verde, ícones 192/512 e SVG), `icon.svg`, `favicon.ico`, `apple-touch-icon.png` e tags Open Graph com `og-image.png` (1200×630), para o link aparecer bonito no WhatsApp. O WhatsApp exige endereço completo na imagem, então o HTML traz `/og-image.png` e o deploy do Netlify roda `scripts/set-site-url.js` (`build.command`), que põe a variável `URL` do site na frente. Rodando local nada muda. Não há service worker: dá para "Adicionar à tela inicial", mas o app não funciona offline. No iPhone, o app instalado tem armazenamento separado do Safari: o espectador precisa abrir o link de convite (ou digitar o código) de novo, e o admin entrar de novo.
 - **Responsivo:** mobile first; topo fixo com abas em pílula (ícone sobre o nome em telas ≤ 520 px).
 - **`localStorage`:** `pelada_admin_token` (token do admin), `pelada_code` (código do espectador), `pelada_sound` (som ligado/desligado). Tudo em `try/catch`, pois o navegador pode bloquear o acesso.
 - **Aviso de versão:** se a API devolver um formato antigo (servidor local não reiniciado), a tela explica como reiniciar. Se a API falhar ao carregar, a tela mostra o motivo no lugar de "Carregando…".
@@ -483,7 +493,7 @@ Modelo em `.env.example`. **Nunca** faça commit de `.env` (já ignorado pelo `.
 Passo a passo no [README](../README.md#publicar-netlify--supabase). Resumo:
 
 1. **Supabase:** criar o projeto, rodar `supabase/migrations/20261020000000_pelada_state.sql` no SQL Editor, copiar Project URL, Publishable key e Secret key.
-2. **Netlify:** importar o repositório (o `netlify.toml` define pasta `public`, funções em `netlify/functions` e o redirect `/api/*` → função), cadastrar as variáveis e fazer o deploy. Cada push na `main` publica de novo.
+2. **Netlify:** importar o repositório (o `netlify.toml` define pasta `public`, funções em `netlify/functions`, o comando de build `node scripts/set-site-url.js` e o redirect `/api/*` → função), cadastrar as variáveis e fazer o deploy. Cada push na `main` publica de novo.
 3. Mudanças de variáveis só valem depois de um **novo deploy**.
 
 ### Diagnóstico de problemas
@@ -512,11 +522,13 @@ Os testes usam o executor nativo do Node (`node:test`), sem dependências.
 
 | Arquivo | O que cobre |
 |---|---|
-| `test/logic.test.js` | Sorteio equilibrado, chegada, fila, "fim da fila", vaga aberta, partida (gols, tempo, pausa), desfazer gol, gol idempotente (`requestId`), renomear jogador (ranking e histórico), resultados por pelada, ranking, código/nível, desempate e migração de dados antigos. |
+| `test/logic.test.js` | Sorteio equilibrado, chegada, fila, "fim da fila", vaga aberta, partida (gols, tempo, pausa), desfazer gol, gol idempotente (`requestId`), renomear jogador (ranking e histórico), resultados por pelada, ranking (inclusive jogos e vitórias), código/nível, desempate e migração de dados antigos. |
 | `test/rules.test.js` | Empate com fila grande (os dois times saem), vencedor que fica, limiar de 8, nova temporada. |
 | `test/supabase.test.js` | API completa sobre um **Supabase simulado** (PostgREST com `409`, `PATCH` condicionado à `version`, broadcast), concorrência com 6 escritas simultâneas, encerramento por tempo na leitura e a função do Netlify (caminhos com/sem redirect, corpo base64, variáveis faltando). |
 | `test/keys.test.js` | Cabeçalhos para chave nova (`sb_secret_`, só `apikey`) e antiga (JWT). |
 | `test/login.test.js` | Bloqueio de login por endereço: 5º erro bloqueia, tempo dobra, acertar zera, erros antigos são esquecidos, tentativas em paralelo não furam o limite e nada é enviado aos celulares. |
+| `test/qr.test.js` | Gerador de QR: bits de formato e de versão contra a tabela do padrão, exemplo clássico de Reed-Solomon, estrutura da matriz (cantos, sincronização, quantidade de módulos por versão) e um leitor independente que recupera o texto nas versões 1 a 10, com acentos e emoji. |
+| `test/share.test.js` | `lanUrls` na configuração, manifest/ícones/favicon (tamanhos), og-image 1200×630, tags da página e o script que completa o endereço da og-image. |
 | `test/config.test.js` | Validação de `SUPABASE_URL`, chaves trocadas e nomes antigos das variáveis. |
 
 Convenções do código: regras de negócio **sempre** em `src/logic.js` como funções que recebem o `db` e lançam `AppError(mensagem, status)` quando a regra é violada; `src/api.js` apenas orquestra; nada de rede ou disco dentro de `logic.js`. Mensagens ao usuário em português.

@@ -1,6 +1,8 @@
 [build]
   publish = "public"
   functions = "netlify/functions"
+  # completa o endereço da imagem de pré-visualização do link (og:image) com o endereço do site
+  command = "node scripts/set-site-url.js"
 
 [build.environment]
   NODE_VERSION = "20"
