@@ -274,3 +274,85 @@ test('dados antigos: times de fila viram fila e goleiros saem de tudo', () => {
   assert.equal(db.session.gkQueue, undefined);
   assert.equal(db.session.teams.flatMap((t) => t.players).length + db.session.queue.length, 5);
 });
+
+test('gol com requestId é idempotente: duplo toque ou nova tentativa não registra duas vezes', () => {
+  const db = started(0);
+  const [a] = db.session.teams;
+  const goal = { teamId: a.id, scorerId: a.players[0], requestId: 'abc123def456' };
+  assert.notEqual(L.recordGoal(db, goal, 2000), false);
+  assert.equal(L.recordGoal(db, goal, 2100), false); // repetido: nada a gravar
+  assert.equal(db.session.match.goals.length, 1);
+  assert.equal(db.events.length, 1);
+
+  // outro gol (requestId diferente) conta e, com 2 gols, a partida acaba
+  L.recordGoal(db, { ...goal, requestId: 'outro123456' }, 3000);
+  assert.equal(db.session.match.status, 'finished');
+  // repetir o pedido depois do fim de jogo não dá erro nem duplica
+  assert.equal(L.recordGoal(db, { ...goal, requestId: 'outro123456' }, 3100), false);
+  assert.equal(db.session.match.goals.length, 2);
+});
+
+test('requestId inválido é ignorado (sem idempotência), como um pedido antigo sem o campo', () => {
+  const db = started(0);
+  const [a] = db.session.teams;
+  L.recordGoal(db, { teamId: a.id, scorerId: a.players[0], requestId: '!' }, 2000);
+  L.recordGoal(db, { teamId: a.id, scorerId: a.players[1] }, 2100);
+  assert.equal(db.session.match.goals.length, 2);
+  assert.equal(db.session.match.goals[0].rid, undefined);
+});
+
+test('renomear o jogador atualiza o nome no ranking, nos gols da partida e no histórico', () => {
+  const db = started(0);
+  const [a] = db.session.teams;
+  const pid = a.players[0];
+  const p = db.players.find((x) => x.id === pid);
+  L.recordGoal(db, { teamId: a.id, scorerId: pid, assistId: a.players[1] }, 2000);
+  L.finishMatch(db, 'manual', 3000);
+  L.nextMatch(db, 4000);
+  L.updatePlayer(db, pid, { name: 'Novo Nome', level: p.level, position: p.position });
+
+  const st = L.viewState(db, 1, { admin: true });
+  assert.equal(st.ranking.find((r) => r.id === pid).name, 'Novo Nome');
+  assert.equal(db.events[0].scorerName, 'Novo Nome');
+  assert.equal(db.matches[0].goals[0].scorerName, 'Novo Nome');
+  assert.equal(db.session.lastResult.goals[0].scorerName, 'Novo Nome');
+
+  // cópias antigas e desatualizadas também não vazam para o ranking
+  db.events[0].scorerName = 'Nome Velho';
+  assert.equal(L.viewState(db, 1, { admin: true }).ranking.find((r) => r.id === pid).name, 'Novo Nome');
+  // se o cadastro for excluído, vale o nome guardado no gol
+  L.deletePlayer(db, pid);
+  assert.equal(L.viewState(db, 1, { admin: true }).ranking.find((r) => r.id === pid).name, 'Nome Velho');
+});
+
+test('resultados: cada pelada mostra só as suas partidas, sem expor times com nomes dos jogadores', () => {
+  const db = started(5);
+  const [a, b] = db.session.teams;
+  L.recordGoal(db, { teamId: a.id, scorerId: a.players[0], assistId: a.players[1] }, 2000);
+  L.recordGoal(db, { teamId: a.id, scorerId: a.players[0] }, 3000);
+  assert.deepEqual(L.viewState(db, 1, { admin: true }).results, []); // ainda não confirmou o fim de jogo
+  L.nextMatch(db, 4000);
+
+  const st = L.viewState(db, 1, { admin: false, code: db.session.code });
+  assert.equal(st.results.length, 1);
+  const r = st.results[0];
+  assert.deepEqual([r.scoreA, r.scoreB, r.winner, r.reason], [2, 0, a.name, 'gols']);
+  assert.deepEqual([r.teamA.id, r.teamB.id], [a.id, b.id]);
+  assert.equal(r.teamA.players, undefined);
+  assert.equal(r.goals.length, 2);
+  assert.equal(r.goals[0].assistName, db.players.find((p) => p.id === a.players[1]).name);
+  assert.equal(L.viewState(db, 1, { admin: false, code: 'ERRADO' }).results, undefined); // sem código, nada
+
+  // nova pelada: a lista recomeça (as partidas continuam na temporada)
+  L.endPelada(db);
+  L.startPelada(db);
+  assert.deepEqual(L.viewState(db, 1, { admin: true }).results, []);
+  assert.equal(db.matches.length, 1);
+});
+
+test('pelada guardada antes de existir o id da pelada ganha um id ao carregar', () => {
+  const db = started(0);
+  db.session.id = null;
+  assert.ok(L.normalizeDb(db).session.id);
+  assert.equal(L.normalizeDb(L.defaultDb()).session.id, null); // sem pelada, sem id
+});

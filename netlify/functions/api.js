@@ -69,12 +69,17 @@ exports.handler = async (event) => {
     }
   }
 
+  // endereço de quem chamou, para o limite de tentativas de login (o Netlify preenche x-nf-client-connection-ip)
+  const headers = event.headers || {};
+  const ip = headers['x-nf-client-connection-ip'] || String(headers['x-forwarded-for'] || '').split(',')[0].trim() || null;
+
   const res = await api.handle(store, {
     method: event.httpMethod,
     pathname,
     query: new URLSearchParams(event.rawQuery || ''),
-    headers: event.headers || {},
+    headers,
     body,
+    ip,
   });
   return json(res.status, res.body);
 };

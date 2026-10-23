@@ -97,7 +97,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req) : null;
-    const out = await api.handle(store, { method: req.method, pathname, query: url.searchParams, headers: req.headers, body });
+    const out = await api.handle(store, { method: req.method, pathname, query: url.searchParams, headers: req.headers, body, ip: req.socket.remoteAddress });
     send(res, out.status, out.body);
   } catch (e) {
     if (!(e instanceof L.AppError)) console.error(e);

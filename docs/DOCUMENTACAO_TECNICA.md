@@ -134,7 +134,8 @@ Todo o estado é **um único objeto JSON** (`db`). Em produção ele é guardado
   "players": [ /* Player */ ],  // cadastro fixo
   "session": { /* Session */ }, // a pelada em andamento
   "events":  [ /* GoalEvent */ ], // gols/assistências da temporada (base do ranking)
-  "matches": [ /* MatchResult */ ] // partidas finalizadas da temporada
+  "matches": [ /* MatchResult */ ], // partidas finalizadas da temporada
+  "loginGuard": { "<ip>": { "fails": 2, "last": 1792536448222, "until": 0 } } // logins errados por endereço (veja 6.1)
 }
 ```
 
@@ -153,6 +154,7 @@ Só **`players`** e **`config`** sobrevivem ao "Começar nova temporada". `event
 **Session** (`db.session`)
 ```jsonc
 {
+  "id": "a1b2c3d4e5",          // identifica a pelada; liga cada MatchResult à pelada em que foi jogado (null em "none")
   "status": "none | lobby | active",
   "code": "K7X2M",            // código dos espectadores (null em "none")
   "arrivals": ["id", ...],     // ordem de chegada ANTES do sorteio (status lobby)
@@ -187,11 +189,14 @@ Cores: **laranja** (`#f2994a`) e **verde** (`#27ae60`). Um time novo sempre rece
 **Goal** / **GoalEvent**
 ```jsonc
 { "id": "…", "teamId": "…", "teamName": "Time Laranja", "ms": 63000,
-  "scorerId": "…", "scorerName": "Ana", "assistId": "…|null", "assistName": "Beto|null" }
+  "scorerId": "…", "scorerName": "Ana", "assistId": "…|null", "assistName": "Beto|null",
+  "rid": "…" /* só se o celular mandou requestId */ }
 ```
-`events` guarda o mesmo gol com `matchId`, `season` e `at`. Os **nomes são copiados** (snapshot) para o ranking sobreviver à exclusão do cadastro de um jogador.
+`events` guarda o mesmo gol com `matchId`, `season` e `at`. Os **nomes são copiados** (snapshot) para o ranking sobreviver à exclusão do cadastro de um jogador. Ao **renomear** o jogador, `updatePlayer` atualiza essas cópias (eventos, gols da partida e histórico), e o ranking usa o nome atual do cadastro sempre que o jogador ainda existe.
 
-**MatchResult** (`matches[]` e `session.lastResult`): `{ id, endedAt, reason, season, teamA, teamB, scoreA, scoreB, winner, goals }`, com `teamA`/`teamB` como `{ id, name, color, players: [nomes] }`.
+`rid` é o `requestId` do pedido que registrou o gol (veja a idempotência em 5.5).
+
+**MatchResult** (`matches[]` e `session.lastResult`): `{ id, sessionId, endedAt, reason, season, teamA, teamB, scoreA, scoreB, winner, goals }`, com `teamA`/`teamB` como `{ id, name, color, players: [nomes] }`.
 
 ### 4.3 Tabela no Supabase
 
@@ -270,6 +275,8 @@ Tempo decorrido = `elapsedMs + (agora − startedAt)`, limitado a `matchSeconds`
 
 **Gol** (`recordGoal`): só com partida `running` ou `paused`; autor e assistente (opcional) precisam estar no time e não podem ser a mesma pessoa. Cria o gol na partida e o evento no ranking.
 
+**Idempotência:** o celular gera um `requestId` (6 a 40 caracteres `A-Z a-z 0-9 _ -`) ao escolher o autor do gol e o reenvia em todos os toques daquela tela. Se a partida já tem um gol com esse `rid`, o pedido não grava nada (devolve o estado atual, sem erro, mesmo que o gol tenha encerrado a partida). Assim um duplo toque ou uma nova tentativa depois de falha de rede não conta o gol duas vezes. Sem `requestId` (ou com valor inválido) o comportamento é o de antes. No front, o mesmo pedido em andamento também é ignorado (`inFlight` em `act()`) e os botões da tela do gol ficam desabilitados enquanto envia.
+
 ### 5.6 Fim de jogo e rotação (`nextMatch`)
 
 O admin confirma com "Próxima partida" (ou escolhendo o vencedor, no empate). Com `queue.length` = número de jogadores esperando:
@@ -284,7 +291,9 @@ O admin confirma com "Próxima partida" (ou escolhendo o vencedor, no empate). C
 
 Funções relacionadas: `needsTiebreak()` (empate com fila entre `teamSize+1` e `teamSize+3`) e `needsBothOut()` (empate com fila ≥ `teamSize+3`). Ambas são enviadas ao front como `session.needsTiebreak` e `session.bothOut`. Se o empate exige vencedor e `winnerTeamId` não vem, a API devolve erro 400 ("Empate: defina qual time ganhou").
 
-A cada fim de jogo confirmado a partida é registrada em `db.matches` e em `session.lastResult`, e `matchesPlayed` é incrementado.
+A cada fim de jogo confirmado a partida é registrada em `db.matches` e em `session.lastResult` (com o `sessionId` da pelada), e `matchesPlayed` é incrementado.
+
+**Resultados de hoje:** `viewState` devolve `results`, as partidas de `db.matches` com o `sessionId` da pelada em andamento (até 30, da mais recente para a mais antiga), só com o necessário para a tela: placar, cores e nomes dos times, motivo do fim, vencedor e gols (autor, assistente, minuto). Não inclui a lista de jogadores de cada time. Uma pelada nova começa com a lista vazia; as partidas continuam em `db.matches` até a nova temporada.
 
 ### 5.7 Ranking e selos
 
@@ -303,7 +312,7 @@ A cada fim de jogo confirmado a partida é registrada em `db.matches` e em `sess
 
 ## 6. API HTTP
 
-Base: `/api`. Corpo e respostas em JSON. Um objeto `req` abstrato (`method`, `pathname`, `query`, `headers`, `body`) é tratado por `api.handle(store, req)`, igual nos dois modos.
+Base: `/api`. Corpo e respostas em JSON. Um objeto `req` abstrato (`method`, `pathname`, `query`, `headers`, `body`, `ip`) é tratado por `api.handle(store, req)`, igual nos dois modos.
 
 ### 6.1 Autenticação
 
@@ -311,6 +320,7 @@ Base: `/api`. Corpo e respostas em JSON. Um objeto `req` abstrato (`method`, `pa
 2. O token é `HMAC-SHA256(db.secret, "admin:" + ADMIN_PASSWORD)`. Ele é enviado depois em `Authorization: Bearer <token>`. Trocar a senha ou o `secret` invalida todos os tokens.
 3. O `EventSource` do navegador não envia cabeçalhos, então o stream local aceita `?token=`.
 4. As comparações usam `crypto.timingSafeEqual` sobre hashes SHA-256.
+5. **Limite de tentativas:** cada login passa por um atraso fixo de 300 ms e por uma contagem de erros **por endereço** (`db.loginGuard`, guardada no estado para valer em todas as instâncias da função). No **5º erro seguido** o endereço é bloqueado por 1 minuto; cada erro depois do bloqueio dobra o tempo (2, 4, 8… até 15 minutos). Durante o bloqueio a API responde `429` mesmo com a senha certa. Acertar zera a contagem e erros com mais de 1 hora são esquecidos. A contagem é gravada com controle otimista, então tentativas simultâneas se contam umas às outras, e **sem avisar os celulares** (`mutate(..., { notify: false })`). O endereço vem de `req.ip`: no Netlify, do cabeçalho `x-nf-client-connection-ip`; no servidor local, do socket. A tabela guarda no máximo 200 endereços. Limitação: o bloqueio é por endereço, então um atacante com muitos endereços diferentes ainda pode tentar; use uma senha forte.
 
 Espectadores não têm token: informam o código em `?code=XXXXX`.
 
@@ -338,7 +348,7 @@ Espectadores não têm token: informam o código em `?code=XXXXX`.
 | `POST /api/session/players/:id/back` | — | Manda para o fim da fila |
 | `POST /api/session/players/:id/remove` | — | Tira do futebol de hoje |
 | `POST /api/match/start` · `pause` · `resume` · `finish` | — | Controle da partida |
-| `POST /api/match/goal` | `{ teamId, scorerId, assistId? }` | Registra gol |
+| `POST /api/match/goal` | `{ teamId, scorerId, assistId?, requestId? }` | Registra gol (idempotente com `requestId`, veja 5.5) |
 | `DELETE /api/match/goals/:id` | — | Desfaz gol |
 | `POST /api/match/next` | `{ winnerTeamId? }` | Fim de jogo e rotação |
 | `PUT /api/config` | `{ matchSeconds, goalsToWin, teamSize }` | Regras da partida |
@@ -361,7 +371,8 @@ Para o **admin**, ou para o espectador com **código válido**:
   "session": {
     "status", "code" /* só admin */, "arrivals", "teams", "queue",
     "matchesPlayed", "match", "needsTiebreak", "bothOut"
-  }
+  },
+  "results": [ { "id", "endedAt", "reason", "teamA", "teamB", "scoreA", "scoreB", "winner", "goals" } ] // partidas desta pelada
 }
 ```
 
@@ -377,6 +388,7 @@ Para o espectador **sem pelada** ou com **código errado** o estado é "travado"
 |---|---|---|
 | 400 | Validação de regra (ex.: "Cada time precisa ter 5 jogadores…") | `{ "error": "mensagem em português" }` |
 | 401 | Senha errada no login ou escrita sem token | idem |
+| 429 | Login bloqueado por tentativas erradas (inclui o erro que causa o bloqueio) | idem, com o tempo de espera |
 | 404 | Rota ou jogador/gol inexistente | idem |
 | 413 | Corpo maior que 100 KB (só servidor local) | idem |
 | 503 | Conflito de gravação repetido 10 vezes | idem |
@@ -427,6 +439,9 @@ Aplicação de página única em JavaScript puro (sem framework nem build), em `
 - **Estado:** uma variável `state` recebe o JSON da API. `setState` ignora estados idênticos (comparando o JSON sem o campo `now`) para não redesenhar nem perder cliques, e detecta as transições de partida para tocar o apito.
 - **Renderização:** `render()` monta o HTML da aba atual com template strings (com `esc()` para escapar texto) e **delegação de eventos** por atributo `data-act`.
 - **Modais** (cadastro, gol em dois toques, "quem chegou", confirmações) ficam fora do `#main` e não são destruídos quando o estado muda. As confirmações são próprias (o `confirm()` nativo falha em alguns navegadores).
+- **Botões de ação rápida** (↧ fim da fila, ✕ tirar, ↶ desfazer gol) têm pelo menos 40×40 px e 8 px de espaço entre si. ↧ e ✕ pedem confirmação, e a do ↧ diz se o jogador sai de um time (e que o primeiro da fila entra no lugar). No celular, o admin vê os dois times um embaixo do outro para o nome caber ao lado dos botões.
+- **Duplo toque:** `act()` ignora um pedido idêntico (mesmo método, rota e corpo) enquanto o primeiro ainda está a caminho.
+- **Resultados de hoje** (aba Jogo, abaixo da fila): placar de cada partida da pelada, com cores dos times, vencedor em destaque, motivo do fim e quem fez cada gol (e a assistência).
 - **Abas:** Jogo (ou Entrar, para quem não tem código), Ranking e, para o admin, Jogadores e Admin.
 - **Jogo:** painel "em campo" (placar estilo TV, gols/assistências, escalações) separado visualmente da "fila de espera" (blocos de `teamSize`: próximo time, time de ré…).
 - **Ranking:** menu Gols/Assistências/Participações com cartões e selos.
@@ -439,7 +454,7 @@ Aplicação de página única em JavaScript puro (sem framework nem build), em `
 | Tema | Como é tratado |
 |---|---|
 | Quem escreve | Toda rota de escrita exige token de admin, validado dentro da transação de gravação. |
-| Senha | Comparação em tempo constante; atraso de 300 ms em cada tentativa de login. Em produção a função **se recusa a funcionar sem `ADMIN_PASSWORD`**. |
+| Senha | Comparação em tempo constante; atraso de 300 ms em cada tentativa de login e bloqueio por endereço a partir do 5º erro seguido (veja 6.1). Em produção a função **se recusa a funcionar sem `ADMIN_PASSWORD`**. |
 | Token | HMAC derivado da senha e de um segredo do banco; trocar a senha invalida todos os tokens. **Não expira** (veja [seção 14](#14-limitações-conhecidas-e-evolução)). |
 | Dados privados | O nível dos jogadores só vai para o admin. O código da pelada só é enviado ao admin. |
 | Banco | A tabela tem **RLS ligado e nenhuma policy**, e `anon`/`authenticated` sem permissão. Só a função (Secret key / `service_role`) acessa. |
@@ -497,10 +512,11 @@ Os testes usam o executor nativo do Node (`node:test`), sem dependências.
 
 | Arquivo | O que cobre |
 |---|---|
-| `test/logic.test.js` | Sorteio equilibrado, chegada, fila, "fim da fila", vaga aberta, partida (gols, tempo, pausa), desfazer gol, ranking, código/nível, desempate e migração de dados antigos. |
+| `test/logic.test.js` | Sorteio equilibrado, chegada, fila, "fim da fila", vaga aberta, partida (gols, tempo, pausa), desfazer gol, gol idempotente (`requestId`), renomear jogador (ranking e histórico), resultados por pelada, ranking, código/nível, desempate e migração de dados antigos. |
 | `test/rules.test.js` | Empate com fila grande (os dois times saem), vencedor que fica, limiar de 8, nova temporada. |
 | `test/supabase.test.js` | API completa sobre um **Supabase simulado** (PostgREST com `409`, `PATCH` condicionado à `version`, broadcast), concorrência com 6 escritas simultâneas, encerramento por tempo na leitura e a função do Netlify (caminhos com/sem redirect, corpo base64, variáveis faltando). |
 | `test/keys.test.js` | Cabeçalhos para chave nova (`sb_secret_`, só `apikey`) e antiga (JWT). |
+| `test/login.test.js` | Bloqueio de login por endereço: 5º erro bloqueia, tempo dobra, acertar zera, erros antigos são esquecidos, tentativas em paralelo não furam o limite e nada é enviado aos celulares. |
 | `test/config.test.js` | Validação de `SUPABASE_URL`, chaves trocadas e nomes antigos das variáveis. |
 
 Convenções do código: regras de negócio **sempre** em `src/logic.js` como funções que recebem o `db` e lançam `AppError(mensagem, status)` quando a regra é violada; `src/api.js` apenas orquestra; nada de rede ou disco dentro de `logic.js`. Mensagens ao usuário em português.
@@ -516,7 +532,7 @@ Convenções do código: regras de negócio **sempre** em `src/logic.js` como fu
 
 - **Estado em uma só linha/arquivo:** simples e suficiente para uma pelada, mas todo o JSON (incluindo `events` da temporada) é lido e gravado a cada ação. Para temporadas muito longas, convém separar eventos em tabela própria.
 - **Token do admin não expira** e é compartilhado por todos os dispositivos do admin. Evolução: expiração, ou Supabase Auth.
-- **Login sem limite de tentativas por IP** (só atraso de 300 ms). Evolução: limitação por IP/Edge.
+- **Limite de login só por endereço**: quem tem muitos endereços diferentes ainda pode tentar senhas. Evolução: limitação no Edge e exigir senha forte.
 - **Código da pelada** tem 5 caracteres (32⁵ ≈ 33 milhões de combinações) e não há limite de tentativas; é adequado para esse uso, não para dados sensíveis.
 - **Goleiros** não participam do sistema (decisão de produto): não podem marcar gol nem assistência no registro.
 - **Sem histórico de temporadas** (decisão de produto): "Começar nova temporada" apaga ranking e partidas.

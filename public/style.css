@@ -260,3 +260,27 @@ tr.top td:nth-child(2) { font-weight: 800; }
   .tabs button { flex-direction: column; gap: 2px; padding: 6px 2px; font-size: .7rem; }
   .tabs .ti { font-size: 1.15rem; }
 }
+
+/* alvos de toque de pelo menos 40px e mais espaço entre ↧ e ✕, para não errar o botão no campo */
+.btn.sm, .btn.icon { min-height: 40px; }
+.btn.icon { min-width: 40px; }
+.lineup .btn.icon, .bench .btn.icon, .ev .btn.icon { font-size: 1rem; padding: 4px; }
+.lineup .plist li, .bench .plist li { gap: 8px; }
+.top-actions .btn { min-height: 40px; }
+#sound { width: 40px; height: 40px; }
+
+/* resultados da pelada */
+.results { border: 1px solid var(--line); border-radius: 16px; padding: 12px; background: var(--card); display: grid; gap: 10px; }
+.results .bench-head h2 { margin: 0; font-size: 1rem; }
+.rs-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.rs { background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; display: grid; gap: 4px; }
+.rs-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rs-n { min-width: 24px; color: var(--muted); font-size: .75rem; font-weight: 700; }
+.rs-team { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; }
+.rs-team.win { color: var(--accent); }
+.rs-score { font-variant-numeric: tabular-nums; font-size: 1.05rem; }
+.rs-why { margin-left: auto; color: var(--muted); font-size: .75rem; }
+.rs-goals { display: flex; flex-wrap: wrap; gap: 2px 12px; color: var(--muted); font-size: .8rem; }
+.rs-goal small { font-size: .75rem; }
+/* admin no celular: com os botões maiores, um time por linha para o nome caber */
+@media (max-width: 520px) { .lineups.adm { grid-template-columns: 1fr; } }

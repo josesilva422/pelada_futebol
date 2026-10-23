@@ -26,6 +26,8 @@ Variáveis opcionais: `PORT` (padrão 3333) e `DATA_FILE` (padrão `data/db.json
 
 > Para acessar de fora do Wi-Fi do campo é preciso publicar o servidor (ex.: Render, Railway, VPS). Se for fazer isso, use uma senha forte e HTTPS.
 
+Depois de 5 senhas erradas seguidas, o login daquele endereço fica bloqueado por 1 minuto (e o tempo dobra a cada novo erro, até 15 minutos).
+
 ## Como funciona
 
 1. **Jogadores** (aba Jogadores): nome, nível (Fraco/Médio/Bom, visível só ao admin) e posição (Gol/Linha).
@@ -37,7 +39,7 @@ Variáveis opcionais: `PORT` (padrão 3333) e `DATA_FILE` (padrão `data/db.json
 7. **Sempre 5 por time**: a partida só inicia com os dois times completos. Se alguém sai (✕) ou vai para o fim da fila (↧), o primeiro da fila sobe e ocupa a vaga. Se a fila estiver vazia, a vaga é preenchida por quem chegar.
 8. **Partida**: botão **Iniciar partida**; 7 minutos (com pausa) ou 2 gols. Com até 7 esperando, o vencedor fica, o perdedor vai para o fim da fila e os 5 primeiros da fila entram. Quem vence (por 1 ou mais gols) sempre fica em campo. Só no **empate com 8 ou mais esperando os dois times saem**: entram o próximo time e o time de ré (completado, se preciso, por quem acabou de sair); o admin define qual time ganhou: ele entra na fila logo depois do último que esperava, na ordem em que estava, e o outro time vem depois dele.
 9. **Empate**: sai o time desafiante. Exceção: se o próximo time está completo e o time de ré tem até 3 jogadores, o admin **define quem ganhou**; o time que perde vai para o fim da fila e seus primeiros jogadores completam o time de ré. Fora dessa exceção o admin também pode escolher o vencedor.
-10. **Gols**: botão ⚽ do time → toque em quem fez o gol → toque em quem deu a assistência (ou "Sem assistência"). ↶ desfaz um gol.
+10. **Gols**: botão ⚽ do time → toque em quem fez o gol → toque em quem deu a assistência (ou "Sem assistência"). ↶ desfaz um gol. Duplo toque não conta o gol duas vezes. Os placares das partidas já jogadas aparecem em **Resultados de hoje**, na aba Jogo.
 11. **Ranking** (público, não precisa de código): menu com Gols, Assistências e Participações (gols + assistências). Selos: ⚽ bola de ouro (mais gols), 👟 chuteira de ouro (mais assistências) e 👑 coroa (mais participações), que aparecem na frente do nome. O ranking é só da temporada atual: "Começar nova temporada" (aba Admin) apaga gols, assistências e partidas, sem guardar histórico. Só os jogadores cadastrados e as regras da partida permanecem.
 
 Regras (duração, gols, jogadores por time) ficam em Admin > Regras da partida.

@@ -87,7 +87,21 @@
     return data;
   }
 
+  // identificador aleatório (crypto.randomUUID não existe em http na rede local, então usa getRandomValues)
+  function newId() {
+    const bytes = new Uint8Array(8);
+    if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(bytes);
+    else bytes.forEach((_, i) => { bytes[i] = Math.floor(Math.random() * 256); });
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  const inFlight = new Set();
+
   async function act(method, url, body) {
+    // duplo toque: se o mesmo pedido ainda está a caminho, ignora o segundo
+    const key = `${method} ${url} ${JSON.stringify(body || {})}`;
+    if (inFlight.has(key)) return false;
+    inFlight.add(key);
     try {
       setState(await api(method, `${url}?${qs()}`, body));
       return true;
@@ -95,6 +109,8 @@
       toast(e.message, true);
       if (/restrito ao administrador/.test(e.message)) logout();
       return false;
+    } finally {
+      inFlight.delete(key);
     }
   }
   const post = (url, body) => act('POST', url, body);
@@ -348,7 +364,7 @@
       ${result}
       <div class="controls">${buttons}</div>
       ${eventList(m, s.teams)}
-      <div class="lineups">${lineup(a)}${lineup(b)}</div>
+      <div class="lineups ${isAdmin() ? 'adm' : ''}">${lineup(a)}${lineup(b)}</div>
     </section>`;
   }
 
@@ -371,11 +387,30 @@
       ${body || '<p class="empty">Ninguém esperando. Quem chegar entra aqui.</p>'}</section>`;
   }
 
+  // placares das partidas já jogadas nesta pelada, da mais recente para a mais antiga
+  function viewResults() {
+    const rs = state.results || [];
+    if (!rs.length) return '';
+    const played = state.session.matchesPlayed;
+    const team = (t, win) => `<span class="rs-team ${win ? 'win' : ''}"><span class="dot" style="--tc:${t.color}"></span>${esc(shortName(t))}</span>`;
+    const items = rs.map((r, i) => {
+      const draw = r.scoreA === r.scoreB;
+      const why = { gols: 'por gols', tempo: 'por tempo', manual: 'encerrada' }[r.reason] || '';
+      const goals = r.goals.map((g) => `<span class="rs-goal">⚽ <b>${esc(g.scorerName)}</b> ${fmtGoalTime(g.ms)}${g.assistName ? ` <small>(ass. ${esc(g.assistName)})</small>` : ''}</span>`).join('');
+      return `<li class="rs"><div class="rs-head"><span class="rs-n">#${played - i}</span>
+        ${team(r.teamA, r.scoreA > r.scoreB)}<b class="rs-score">${r.scoreA} x ${r.scoreB}</b>${team(r.teamB, r.scoreB > r.scoreA)}
+        <span class="rs-why">${draw ? 'empate · ' : ''}${why}</span></div>
+        ${goals ? `<div class="rs-goals">${goals}</div>` : ''}</li>`;
+    }).join('');
+    return `<section class="results"><div class="bench-head"><h2>📋 Resultados de hoje</h2><span class="muted">${rs.length} partida${rs.length === 1 ? '' : 's'}</span></div>
+      <ul class="rs-list">${items}</ul></section>`;
+  }
+
   function viewGame() {
     const s = state.session;
     if (!s || s.status === 'none') return isAdmin() ? viewNoPelada() : viewLanding();
     if (s.status === 'lobby') return viewLobby();
-    return `${codeBanner()}${viewPitch()}${viewBench()}
+    return `${codeBanner()}${viewPitch()}${viewBench()}${viewResults()}
       ${isAdmin() ? `<div class="row wrap">
         <button class="btn grow" data-act="arrive">＋ Jogador chegou</button>
         ${s.matchesPlayed === 0 && s.match.status === 'idle' ? '<button class="btn" data-act="redraw">🔄 Refazer sorteio</button>' : ''}</div>` : ''}`;
@@ -527,10 +562,20 @@
       const sheet = openModal(`${head('🅰', `${esc(scorer.name)} marcou!`, 'Quem deu a assistência?')}${grid(ps.filter((p) => p.id !== scorer.id))}
         <button type="button" class="btn big" id="noassist" style="width:100%;margin-top:10px">Sem assistência</button>
         <button type="button" class="btn ghost" id="backstep" style="width:100%;margin-top:6px">← Voltar</button>`);
+      // o mesmo requestId vale para todos os toques desta tela: a API registra o gol uma vez só, mesmo com duplo toque ou nova tentativa
+      const requestId = newId();
+      const buttons = sheet.querySelectorAll('button');
+      let saving = false;
       const save = async (assist) => {
-        if (await post('/api/match/goal', { teamId, scorerId: scorer.id, assistId: assist ? assist.id : null })) {
+        if (saving) return;
+        saving = true;
+        buttons.forEach((b) => { b.disabled = true; });
+        if (await post('/api/match/goal', { teamId, scorerId: scorer.id, assistId: assist ? assist.id : null, requestId })) {
           closeModal();
           toast(`⚽ Gol de ${scorer.name}${assist ? ` · assistência de ${assist.name}` : ''}`);
+        } else {
+          saving = false;
+          buttons.forEach((b) => { b.disabled = false; });
         }
       };
       sheet.querySelectorAll('.pbtn').forEach((b) => { b.onclick = () => save(player(b.dataset.pid)); });
@@ -605,7 +650,13 @@
     nextwin: (el) => post('/api/match/next', { winnerTeamId: el.dataset.team }),
     goal: (el) => goalModal(el.dataset.team),
     undo: async (el) => { if (await ask('Desfazer este gol?', 'Desfazer')) act('DELETE', `/api/match/goals/${el.dataset.id}`); },
-    back: (el) => post(`/api/session/players/${el.dataset.id}/back`),
+    back: async (el) => {
+      const onTeam = state.session.teams.some((t) => t.players.includes(el.dataset.id));
+      const msg = onTeam
+        ? `${pname(el)} sai do time e vai para o fim da fila. O primeiro da fila entra no lugar.`
+        : `${pname(el)} vai para o fim da fila.`;
+      if (await ask(msg, 'Fim da fila')) post(`/api/session/players/${el.dataset.id}/back`);
+    },
     remove: async (el) => { if (await ask(`Tirar ${pname(el)} do futebol de hoje?`, 'Tirar')) post(`/api/session/players/${el.dataset.id}/remove`); },
     addplayer: () => playerModal(null),
     editplayer: (el) => playerModal(player(el.dataset.id)),

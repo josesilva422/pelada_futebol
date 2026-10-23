@@ -31,6 +31,7 @@ function newMatch() {
 
 function newSession() {
   return {
+    id: null, // identifica a pelada: liga cada resultado de partida à pelada em que foi jogado
     status: 'none', // none (sem pelada) | lobby (chegada) | active (sorteio feito)
     code: null, // codigo que os espectadores usam para entrar
     arrivals: [], // ordem de chegada, antes do sorteio
@@ -52,6 +53,7 @@ function defaultDb() {
     session: newSession(),
     events: [], // gols/assistencias da temporada
     matches: [], // historico de partidas da temporada
+    loginGuard: {}, // tentativas de login erradas por endereço: { [ip]: { fails, until, last } }
   };
 }
 
@@ -71,6 +73,7 @@ function normalizeDb(db) {
   s.queue = s.queue.filter(notGk);
   s.teams.forEach((t) => { t.players = t.players.filter(notGk); });
   refill(out);
+  if (s.status !== 'none' && !s.id) s.id = uid(); // pelada criada antes de existir o id
   delete s.paused;
   delete s.gkQueue;
   delete s.teamCounter;
@@ -103,8 +106,19 @@ function updatePlayer(db, id, input) {
   const p = playerById(db, id);
   if (!p) throw new AppError('Jogador não encontrado', 404);
   Object.assign(p, cleanPlayer(input, db, id));
+  renameInGoals(db, p);
   if (p.position === 'gol') removePlayer(db, id); // goleiro não participa da pelada
   db.players.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+}
+
+// os gols guardam uma cópia do nome (para sobreviver à exclusão do cadastro): ao renomear, atualiza as cópias
+function renameInGoals(db, p) {
+  const lists = [db.events, db.session.match.goals, ...db.matches.map((m) => m.goals)];
+  if (db.session.lastResult) lists.push(db.session.lastResult.goals);
+  lists.forEach((goals) => goals.forEach((g) => {
+    if (g.scorerId === p.id) g.scorerName = p.name;
+    if (g.assistId === p.id) g.assistName = p.name;
+  }));
 }
 
 function deletePlayer(db, id) {
@@ -243,6 +257,7 @@ const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function startPelada(db) {
   if (db.session.status !== 'none') throw new AppError('Já existe uma pelada em andamento');
   db.session = newSession();
+  db.session.id = uid();
   db.session.status = 'lobby';
   db.session.code = Array.from({ length: 5 }, () => CODE_CHARS[crypto.randomInt(CODE_CHARS.length)]).join('');
 }
@@ -314,9 +329,13 @@ function tick(db, now) {
   return false;
 }
 
-function recordGoal(db, { teamId, scorerId, assistId }, now) {
+// requestId (gerado pelo celular a cada gol) torna o pedido idempotente: um duplo toque ou uma nova
+// tentativa depois de falha de rede não registra o mesmo gol duas vezes. Devolve false se já estava registrado.
+function recordGoal(db, { teamId, scorerId, assistId, requestId }, now) {
   const s = db.session;
   const m = s.match;
+  const rid = /^[A-Za-z0-9_-]{6,40}$/.test(requestId || '') ? requestId : null;
+  if (rid && m.goals.some((g) => g.rid === rid)) return false;
   tick(db, now);
   if (m.status !== 'running' && m.status !== 'paused') throw new AppError('Não há partida em andamento');
   const team = s.teams.find((t) => t.id === teamId);
@@ -331,6 +350,7 @@ function recordGoal(db, { teamId, scorerId, assistId }, now) {
   const goal = {
     id: uid(), teamId, teamName: team.name, ms: elapsed(db, now),
     scorerId, scorerName: scorer.name, assistId: assist ? assist.id : null, assistName: assist ? assist.name : null,
+    ...(rid ? { rid } : {}),
   };
   m.goals.push(goal);
   db.events.push({ ...goal, matchId: m.id, season: db.season, at: now });
@@ -396,7 +416,7 @@ function nextMatch(db, now, winnerTeamId) {
   const snap = (t) => ({ id: t.id, name: t.name, color: t.color, players: t.players.map((id) => (playerById(db, id) || {}).name).filter(Boolean) });
 
   s.lastResult = {
-    id: s.match.id, endedAt: now, reason: s.match.reason, season: db.season,
+    id: s.match.id, sessionId: s.id, endedAt: now, reason: s.match.reason, season: db.season,
     teamA: snap(a), teamB: snap(b), scoreA: score(s.match, a.id), scoreB: score(s.match, b.id),
     winner: winner ? winner.name : null, goals: s.match.goals,
   };
@@ -462,14 +482,34 @@ function ranking(db) {
     if (!map.has(id)) map.set(id, { id, name, goals: 0, assists: 0 });
     return map.get(id);
   };
+  // nome atual do cadastro; a cópia gravada no gol só vale se o jogador foi excluído
+  const nameOf = (id, saved) => (playerById(db, id) || {}).name || saved;
   db.events.forEach((e) => {
-    row(e.scorerId, e.scorerName).goals++;
-    if (e.assistId) row(e.assistId, e.assistName).assists++;
+    row(e.scorerId, nameOf(e.scorerId, e.scorerName)).goals++;
+    if (e.assistId) row(e.assistId, nameOf(e.assistId, e.assistName)).assists++;
   });
   return [...map.values()];
 }
 
 const publicPlayers = (db) => db.players.map(({ id, name, position }) => ({ id, name, position }));
+
+// resultados das partidas da pelada em andamento, da mais recente para a mais antiga
+const RESULTS_LIMIT = 30;
+function results(db) {
+  const s = db.session;
+  if (!s.id) return [];
+  return db.matches.filter((m) => m.sessionId === s.id).slice(0, RESULTS_LIMIT).map((m) => ({
+    id: m.id,
+    endedAt: m.endedAt,
+    reason: m.reason,
+    teamA: { id: m.teamA.id, name: m.teamA.name, color: m.teamA.color },
+    teamB: { id: m.teamB.id, name: m.teamB.name, color: m.teamB.color },
+    scoreA: m.scoreA,
+    scoreB: m.scoreB,
+    winner: m.winner,
+    goals: m.goals.map((g) => ({ id: g.id, teamId: g.teamId, scorerName: g.scorerName, assistName: g.assistName, ms: g.ms })),
+  }));
+}
 
 // admin vê tudo (inclusive o nível dos jogadores); espectador vê a pelada só com o código,
 // mas o ranking é público
@@ -495,6 +535,7 @@ function viewState(db, now, { admin, code }) {
       needsTiebreak: needsTiebreak(db),
       bothOut: needsBothOut(db),
     },
+    results: results(db),
   };
 }
 
