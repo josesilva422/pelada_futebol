@@ -31,7 +31,7 @@ Depois de 5 senhas erradas seguidas, o login daquele endereço fica bloqueado po
 ## Como funciona
 
 1. **Jogadores** (aba Jogadores): nome, nível (Fraco/Médio/Bom, visível só ao admin) e posição (Gol/Linha).
-2. **Iniciar pelada** (aba Jogo): gera um **código** de 5 caracteres para os espectadores. "Encerrar pelada" (aba Admin) desmonta times e fila e invalida o código.
+2. **Iniciar pelada** (aba Jogo): gera um **código** de 5 caracteres para os espectadores. "Encerrar pelada" (aba Admin) desmonta times e fila, apaga os resultados de hoje e invalida o código.
 3. **Chegada**: o admin marca "Chegou"; a ordem de chegada é guardada.
 4. **Sorteio**: os 10 primeiros a chegar são sorteados em 2 times de 5, equilibrados por nível (fraco=1, médio=2, bom=3). O nível só aparece para o admin, na aba Jogadores. Só os times em campo têm cor: **laranja** e **verde**.
 5. **Goleiros** são apenas informação do cadastro: não entram em chegada, sorteio, times nem fila.
@@ -39,8 +39,8 @@ Depois de 5 senhas erradas seguidas, o login daquele endereço fica bloqueado po
 7. **Sempre 5 por time**: a partida só inicia com os dois times completos. Se alguém sai (✕) ou vai para o fim da fila (↧), o primeiro da fila sobe e ocupa a vaga. Se a fila estiver vazia, a vaga é preenchida por quem chegar.
 8. **Partida**: botão **Iniciar partida**; 7 minutos (com pausa) ou 2 gols. Com até 7 esperando, o vencedor fica, o perdedor vai para o fim da fila e os 5 primeiros da fila entram. Quem vence (por 1 ou mais gols) sempre fica em campo. Só no **empate com 8 ou mais esperando os dois times saem**: entram o próximo time e o time de ré (completado, se preciso, por quem acabou de sair); o admin define qual time ganhou: ele entra na fila logo depois do último que esperava, na ordem em que estava, e o outro time vem depois dele.
 9. **Empate**: sai o time desafiante. Exceção: se o próximo time está completo e o time de ré tem até 3 jogadores, o admin **define quem ganhou**; o time que perde vai para o fim da fila e seus primeiros jogadores completam o time de ré. Fora dessa exceção o admin também pode escolher o vencedor.
-10. **Gols**: botão ⚽ do time → toque em quem fez o gol → toque em quem deu a assistência (ou "Sem assistência"). ↶ desfaz um gol. Duplo toque não conta o gol duas vezes. Os placares das partidas já jogadas aparecem em **Resultados de hoje**, na aba Jogo.
-11. **Ranking** (público, não precisa de código): menu com Gols, Assistências, Participações (gols + assistências), Vitórias e Jogos. Cada cartão mostra gols, assistências, jogos e vitórias (e o aproveitamento, na aba Vitórias). Vitória é pelo placar: o empate que o organizador desempata não conta. Selos: ⚽ bola de ouro (mais gols), 👟 chuteira de ouro (mais assistências) e 👑 coroa (mais participações), que aparecem na frente do nome. O ranking é só da temporada atual: "Começar nova temporada" (aba Admin) apaga gols, assistências e partidas, sem guardar histórico. Só os jogadores cadastrados e as regras da partida permanecem.
+10. **Gols**: botão ⚽ do time → toque em quem fez o gol → toque em quem deu a assistência (ou "Sem assistência"). ↶ desfaz um gol. Duplo toque não conta o gol duas vezes. Os placares das partidas já jogadas aparecem em **Resultados de hoje**, na aba Jogo; eles valem só para a pelada de hoje e somem quando ela é encerrada (o sistema não guarda histórico de partidas).
+11. **Ranking** (público, não precisa de código): menu com Gols, Assistências e Participações (gols + assistências). Selos: ⚽ bola de ouro (mais gols), 👟 chuteira de ouro (mais assistências) e 👑 coroa (mais participações), que aparecem na frente do nome. O ranking é só da temporada atual: "Começar nova temporada" (aba Admin) apaga gols e assistências, sem guardar histórico. Só os jogadores cadastrados e as regras da partida permanecem.
 
 Regras (duração, gols, jogadores por time) ficam em Admin > Regras da partida.
 

@@ -90,10 +90,10 @@ test('nova temporada: só jogadores e configurações permanecem', () => {
   L.addPlayer(db, { name: 'Ana', level: 'bom', position: 'linha' });
   L.setConfig(db, { matchSeconds: 600, goalsToWin: 3, teamSize: 5 });
   db.events.push({ id: 'e', scorerId: 'x', scorerName: 'X', season: 1 });
-  db.matches.push({ id: 'm' });
+  db.session.results.push({ id: 'm' });
   L.resetSeason(db);
   assert.equal(db.events.length, 0);
-  assert.equal(db.matches.length, 0);
+  assert.equal(db.session.results.length, 0);
   assert.equal(db.players.length, 1);
   assert.equal(db.config.matchSeconds, 600);
   assert.equal(L.viewState(db, 1, { admin: true }).ranking.length, 0);

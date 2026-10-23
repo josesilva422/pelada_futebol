@@ -139,12 +139,11 @@ Todo o estado é **um único objeto JSON** (`db`). Em produção ele é guardado
   "players": [ /* Player */ ],  // cadastro fixo
   "session": { /* Session */ }, // a pelada em andamento
   "events":  [ /* GoalEvent */ ], // gols/assistências da temporada (base do ranking)
-  "matches": [ /* MatchResult */ ], // partidas finalizadas da temporada
   "loginGuard": { "<ip>": { "fails": 2, "last": 1792536448222, "until": 0 } } // logins errados por endereço (veja 6.1)
 }
 ```
 
-Só **`players`** e **`config`** sobrevivem ao "Começar nova temporada". `events` e `matches` são apagados e `season` é incrementado — **não há histórico de temporadas anteriores** (requisito do produto).
+Só **`players`** e **`config`** sobrevivem ao "Começar nova temporada". `events` e os resultados da pelada em andamento (`session.results`) são apagados e `season` é incrementado — **não há histórico de temporadas anteriores** (requisito do produto).
 
 ### 4.2 Entidades
 
@@ -159,7 +158,6 @@ Só **`players`** e **`config`** sobrevivem ao "Começar nova temporada". `event
 **Session** (`db.session`)
 ```jsonc
 {
-  "id": "a1b2c3d4e5",          // identifica a pelada; liga cada MatchResult à pelada em que foi jogado (null em "none")
   "status": "none | lobby | active",
   "code": "K7X2M",            // código dos espectadores (null em "none")
   "arrivals": ["id", ...],     // ordem de chegada ANTES do sorteio (status lobby)
@@ -168,7 +166,7 @@ Só **`players`** e **`config`** sobrevivem ao "Começar nova temporada". `event
   "queue": ["id", ...],        // fila de espera, por ordem de chegada
   "matchesPlayed": 0,
   "match": Match,
-  "lastResult": MatchResult | null
+  "results": [ MatchResult ]   // placares das partidas desta pelada, do mais novo para o mais antigo (até 30)
 }
 ```
 
@@ -197,11 +195,11 @@ Cores: **laranja** (`#f2994a`) e **verde** (`#27ae60`). Um time novo sempre rece
   "scorerId": "…", "scorerName": "Ana", "assistId": "…|null", "assistName": "Beto|null",
   "rid": "…" /* só se o celular mandou requestId */ }
 ```
-`events` guarda o mesmo gol com `matchId`, `season` e `at`. Os **nomes são copiados** (snapshot) para o ranking sobreviver à exclusão do cadastro de um jogador. Ao **renomear** o jogador, `updatePlayer` atualiza essas cópias (eventos, gols da partida e histórico), e o ranking usa o nome atual do cadastro sempre que o jogador ainda existe.
+`events` guarda o mesmo gol com `matchId`, `season` e `at`. Os **nomes são copiados** (snapshot) para o ranking sobreviver à exclusão do cadastro de um jogador. Ao **renomear** o jogador, `updatePlayer` atualiza essas cópias (eventos, gols da partida e resultados da pelada), e o ranking usa o nome atual do cadastro sempre que o jogador ainda existe.
 
 `rid` é o `requestId` do pedido que registrou o gol (veja a idempotência em 5.5).
 
-**MatchResult** (`matches[]` e `session.lastResult`): `{ id, sessionId, endedAt, reason, season, teamA, teamB, scoreA, scoreB, winner, goals }`, com `teamA`/`teamB` como `{ id, name, color, players: [nomes], playerIds: [ids] }`. `players` e `playerIds` têm a mesma ordem; os ids são a base dos jogos e vitórias do ranking. Partidas gravadas antes de existir `playerIds` são resolvidas pelo nome (únicos no cadastro).
+**MatchResult** (`session.results[]`): `{ id, endedAt, reason, teamA, teamB, scoreA, scoreB, goals }`, com `teamA`/`teamB` como `{ id, name, color }` e `goals` como `{ id, teamId, scorerId, scorerName, assistId, assistName, ms }`. Fica **só dentro da pelada em andamento** e some quando ela é encerrada: **o sistema não guarda histórico de partidas** (nem por temporada). Versões antigas gravavam `db.matches`, `session.lastResult` e `session.id`; `normalizeDb` descarta esses campos ao carregar.
 
 ### 4.3 Tabela no Supabase
 
@@ -240,7 +238,7 @@ stateDiagram-v2
 - **`none`**: sem pelada. Espectadores só veem o ranking e a tela de entrada.
 - **`lobby`**: o admin marca "Chegou"; a ordem de chegada é guardada em `arrivals`.
 - **`active`**: times sorteados, partidas acontecendo.
-- "Encerrar pelada" descarta times e fila e **invalida o código**; gols e assistências continuam na temporada.
+- "Encerrar pelada" descarta times, fila e resultados da pelada e **invalida o código**; gols e assistências continuam na temporada.
 
 ### 5.2 Chegada e goleiros
 
@@ -296,17 +294,16 @@ O admin confirma com "Próxima partida" (ou escolhendo o vencedor, no empate). C
 
 Funções relacionadas: `needsTiebreak()` (empate com fila entre `teamSize+1` e `teamSize+3`) e `needsBothOut()` (empate com fila ≥ `teamSize+3`). Ambas são enviadas ao front como `session.needsTiebreak` e `session.bothOut`. Se o empate exige vencedor e `winnerTeamId` não vem, a API devolve erro 400 ("Empate: defina qual time ganhou").
 
-A cada fim de jogo confirmado a partida é registrada em `db.matches` e em `session.lastResult` (com o `sessionId` da pelada), e `matchesPlayed` é incrementado.
+A cada fim de jogo confirmado o placar entra no começo de `session.results` (só os 30 mais recentes ficam) e `matchesPlayed` é incrementado.
 
-**Resultados de hoje:** `viewState` devolve `results`, as partidas de `db.matches` com o `sessionId` da pelada em andamento (até 30, da mais recente para a mais antiga), só com o necessário para a tela: placar, cores e nomes dos times, motivo do fim, vencedor e gols (autor, assistente, minuto). Não inclui a lista de jogadores de cada time. Uma pelada nova começa com a lista vazia; as partidas continuam em `db.matches` até a nova temporada.
+**Resultados de hoje:** `viewState` devolve `results` (cópia de `session.results`) para o admin e para o espectador com código. Cada item traz placar, cores e nomes dos times, motivo do fim e os gols (autor, assistente, minuto), sem a lista de jogadores de cada time. Uma pelada nova começa com a lista vazia.
 
 ### 5.7 Ranking e selos
 
-- Calculado **na hora** a partir de `db.events` e `db.matches`: por jogador, `goals`, `assists`, `games` (partidas disputadas) e `wins` (vitórias); **participações = gols + assistências**.
-- **Vitória** é pelo placar: o time com mais gols. O empate que o admin desempata (para decidir quem fica) **não** conta como vitória. Só entra em `games` quem estava no time quando a partida foi confirmada em "Próxima partida"; quem só esperou na fila não ganha jogo.
-- Cinco visões: Gols, Assistências, Participações, Vitórias e Jogos. Empates desempatam por gols, depois assistências, depois vitórias e nome (em Vitórias, primeiro pelo aproveitamento, `wins / games`). Cada cartão mostra gols, assistências, jogos e vitórias.
+- Calculado **na hora** a partir de `db.events`: por jogador, `goals` e `assists`; **participações = gols + assistências**. Não há contagem de jogos nem de vitórias.
+- Três visões: Gols, Assistências e Participações (empates desempatam por gols, depois assistências, depois nome).
 - **Selos** (calculados no front): ⚽ dourado = mais gols (bola de ouro), 👟 dourado = mais assistências (chuteira de ouro), 👑 = mais participações. Em caso de empate no topo, todos os empatados recebem o selo.
-- "Começar nova temporada" apaga `events`, `matches` e `lastResult`, e incrementa `season`. Cadastro de jogadores e regras permanecem.
+- "Começar nova temporada" apaga `events` e `session.results`, e incrementa `season`. Cadastro de jogadores e regras permanecem.
 
 ### 5.8 Configurações (`setConfig`)
 
@@ -371,14 +368,14 @@ Para o **admin**, ou para o espectador com **código válido**:
   "now": 1792536448222,            // relógio do servidor (o front calcula o offset)
   "admin": true,
   "season": 1,
-  "ranking": [ { "id", "name", "goals", "assists", "games", "wins" } ],
+  "ranking": [ { "id", "name", "goals", "assists" } ],
   "config": { "matchSeconds", "goalsToWin", "teamSize" },
   "players": [ ... ],              // admin: com "level"; espectador: só id, name, position
   "session": {
     "status", "code" /* só admin */, "arrivals", "teams", "queue",
     "matchesPlayed", "match", "needsTiebreak", "bothOut"
   },
-  "results": [ { "id", "endedAt", "reason", "teamA", "teamB", "scoreA", "scoreB", "winner", "goals" } ] // partidas desta pelada
+  "results": [ { "id", "endedAt", "reason", "teamA", "teamB", "scoreA", "scoreB", "goals" } ] // placares das partidas desta pelada
 }
 ```
 
@@ -450,7 +447,7 @@ Aplicação de página única em JavaScript puro (sem framework nem build), em `
 - **Resultados de hoje** (aba Jogo, abaixo da fila): placar de cada partida da pelada, com cores dos times, vencedor em destaque, motivo do fim e quem fez cada gol (e a assistência).
 - **Abas:** Jogo (ou Entrar, para quem não tem código), Ranking e, para o admin, Jogadores e Admin.
 - **Jogo:** painel "em campo" (placar estilo TV, gols/assistências, escalações) separado visualmente da "fila de espera" (blocos de `teamSize`: próximo time, time de ré…).
-- **Ranking:** menu Gols/Assistências/Participações/Vitórias/Jogos (em duas linhas no celular), com cartões e selos.
+- **Ranking:** menu Gols/Assistências/Participações com cartões e selos.
 - **Convite** (botão "📲 Convidar" ao lado do código, só admin): abre um modal com o **QR code**, o link `<endereço>/?c=CODIGO`, "Compartilhar" (`navigator.share`, quando existe), WhatsApp (`wa.me`), "Copiar link" e "Copiar código". Ao abrir um link com `?c=`, o app guarda o código (só letras e números, até 10), limpa o endereço e entra direto na pelada; link velho cai na mensagem "Código inválido ou pelada encerrada". No servidor local, quem abre por `localhost` recebe no link o endereço da rede (`lanUrls[0]`), pois `localhost` não funciona no celular dos outros; sem endereço de rede o modal avisa. `copyText()` cai para `execCommand('copy')` onde `navigator.clipboard` não existe (http na rede local). O QR vem de `public/qr.js` (modo byte, correção de erro M, versões 1 a 10, até 213 bytes).
 - **Tela ligada:** com a partida rodando ou pausada e a aba à vista, o app pede `navigator.wakeLock` (precisa de https ou localhost; sem isso, ou se o aparelho negar, segue normal) e solta quando a partida acaba. O navegador solta sozinho ao esconder a aba; ao voltar o app pede de novo.
 - **Ao voltar para a aba** (`visibilitychange`, `online`, `pageshow` vindo do cache), o app pede o estado na hora, em vez de esperar o ciclo de 10 s. Se ficou mais de 15 s fora, o que aconteceu nesse tempo não toca apito atrasado (silêncio por 5 s depois da volta).
@@ -522,7 +519,7 @@ Os testes usam o executor nativo do Node (`node:test`), sem dependências.
 
 | Arquivo | O que cobre |
 |---|---|
-| `test/logic.test.js` | Sorteio equilibrado, chegada, fila, "fim da fila", vaga aberta, partida (gols, tempo, pausa), desfazer gol, gol idempotente (`requestId`), renomear jogador (ranking e histórico), resultados por pelada, ranking (inclusive jogos e vitórias), código/nível, desempate e migração de dados antigos. |
+| `test/logic.test.js` | Sorteio equilibrado, chegada, fila, "fim da fila", vaga aberta, partida (gols, tempo, pausa), desfazer gol, gol idempotente (`requestId`), renomear jogador (ranking e resultados da pelada), resultados da pelada (limite de 30, somem ao encerrar), ranking, código/nível, desempate e migração de dados antigos. |
 | `test/rules.test.js` | Empate com fila grande (os dois times saem), vencedor que fica, limiar de 8, nova temporada. |
 | `test/supabase.test.js` | API completa sobre um **Supabase simulado** (PostgREST com `409`, `PATCH` condicionado à `version`, broadcast), concorrência com 6 escritas simultâneas, encerramento por tempo na leitura e a função do Netlify (caminhos com/sem redirect, corpo base64, variáveis faltando). |
 | `test/keys.test.js` | Cabeçalhos para chave nova (`sb_secret_`, só `apikey`) e antiga (JWT). |
@@ -547,6 +544,6 @@ Convenções do código: regras de negócio **sempre** em `src/logic.js` como fu
 - **Limite de login só por endereço**: quem tem muitos endereços diferentes ainda pode tentar senhas. Evolução: limitação no Edge e exigir senha forte.
 - **Código da pelada** tem 5 caracteres (32⁵ ≈ 33 milhões de combinações) e não há limite de tentativas; é adequado para esse uso, não para dados sensíveis.
 - **Goleiros** não participam do sistema (decisão de produto): não podem marcar gol nem assistência no registro.
-- **Sem histórico de temporadas** (decisão de produto): "Começar nova temporada" apaga ranking e partidas.
+- **Sem histórico** (decisão de produto): "Começar nova temporada" apaga o ranking, e os resultados de cada pelada somem quando ela é encerrada. Não há histórico de partidas nem de temporadas.
 - **Fim da partida por tempo em produção** depende de algum cliente com a tela aberta pedir o estado; se ninguém consultar, a partida só é encerrada na próxima leitura (o resultado em si é calculado pelo horário, então fica correto).
 - **Realtime por broadcast público:** quem tiver a Publishable key pode escutar os avisos "mudou" (sem dados). Se for um problema, é possível usar canais privados com autorização.

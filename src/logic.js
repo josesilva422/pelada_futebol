@@ -31,7 +31,6 @@ function newMatch() {
 
 function newSession() {
   return {
-    id: null, // identifica a pelada: liga cada resultado de partida à pelada em que foi jogado
     status: 'none', // none (sem pelada) | lobby (chegada) | active (sorteio feito)
     code: null, // codigo que os espectadores usam para entrar
     arrivals: [], // ordem de chegada, antes do sorteio
@@ -40,7 +39,7 @@ function newSession() {
     queue: [], // fila de espera, por ordem de chegada
     matchesPlayed: 0,
     match: newMatch(),
-    lastResult: null,
+    results: [], // placares das partidas desta pelada, da mais recente para a mais antiga; somem quando a pelada acaba
   };
 }
 
@@ -52,7 +51,6 @@ function defaultDb() {
     players: [],
     session: newSession(),
     events: [], // gols/assistencias da temporada
-    matches: [], // historico de partidas da temporada
     loginGuard: {}, // tentativas de login erradas por endereço: { [ip]: { fails, until, last } }
   };
 }
@@ -73,7 +71,11 @@ function normalizeDb(db) {
   s.queue = s.queue.filter(notGk);
   s.teams.forEach((t) => { t.players = t.players.filter(notGk); });
   refill(out);
-  if (s.status !== 'none' && !s.id) s.id = uid(); // pelada criada antes de existir o id
+  if (!Array.isArray(s.results)) s.results = [];
+  // o histórico de partidas deixou de ser guardado: descarta o que versões antigas gravaram
+  delete out.matches;
+  delete s.lastResult;
+  delete s.id;
   delete s.paused;
   delete s.gkQueue;
   delete s.teamCounter;
@@ -113,8 +115,7 @@ function updatePlayer(db, id, input) {
 
 // os gols guardam uma cópia do nome (para sobreviver à exclusão do cadastro): ao renomear, atualiza as cópias
 function renameInGoals(db, p) {
-  const lists = [db.events, db.session.match.goals, ...db.matches.map((m) => m.goals)];
-  if (db.session.lastResult) lists.push(db.session.lastResult.goals);
+  const lists = [db.events, db.session.match.goals, ...db.session.results.map((r) => r.goals)];
   lists.forEach((goals) => goals.forEach((g) => {
     if (g.scorerId === p.id) g.scorerName = p.name;
     if (g.assistId === p.id) g.assistName = p.name;
@@ -257,7 +258,6 @@ const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function startPelada(db) {
   if (db.session.status !== 'none') throw new AppError('Já existe uma pelada em andamento');
   db.session = newSession();
-  db.session.id = uid();
   db.session.status = 'lobby';
   db.session.code = Array.from({ length: 5 }, () => CODE_CHARS[crypto.randomInt(CODE_CHARS.length)]).join('');
 }
@@ -268,6 +268,7 @@ function endPelada(db) {
 
 // ---------- partida ----------
 
+const RESULTS_LIMIT = 30; // quantos placares da pelada ficam guardados
 const totalMs = (db) => db.config.matchSeconds * 1000;
 
 function elapsed(db, now) {
@@ -413,18 +414,14 @@ function nextMatch(db, now, winnerTeamId) {
   if (!winner && (tiebreak || needsBothOut(db))) throw new AppError('Empate: defina qual time ganhou');
   const stay = winner || a;
   const leave = stay === a ? b : a;
-  // players (nomes) e playerIds andam juntos, na mesma ordem: o ranking usa os ids para contar jogos e vitórias
-  const snap = (t) => {
-    const named = t.players.map((id) => [id, (playerById(db, id) || {}).name]).filter(([, name]) => name);
-    return { id: t.id, name: t.name, color: t.color, players: named.map(([, name]) => name), playerIds: named.map(([id]) => id) };
-  };
-
-  s.lastResult = {
-    id: s.match.id, sessionId: s.id, endedAt: now, reason: s.match.reason, season: db.season,
-    teamA: snap(a), teamB: snap(b), scoreA: score(s.match, a.id), scoreB: score(s.match, b.id),
-    winner: winner ? winner.name : null, goals: s.match.goals,
-  };
-  db.matches.unshift(s.lastResult);
+  // placar da partida para "Resultados de hoje": fica só na pelada em andamento (some quando ela acaba)
+  const team = (t) => ({ id: t.id, name: t.name, color: t.color });
+  s.results.unshift({
+    id: s.match.id, endedAt: now, reason: s.match.reason,
+    teamA: team(a), teamB: team(b), scoreA: score(s.match, a.id), scoreB: score(s.match, b.id),
+    goals: s.match.goals.map(({ id, teamId, scorerId, scorerName, assistId, assistName, ms }) => ({ id, teamId, scorerId, scorerName, assistId, assistName, ms })),
+  });
+  s.results.length = Math.min(s.results.length, RESULTS_LIMIT);
   s.matchesPlayed++;
 
   // empate com 8+ jogadores esperando: os dois times saem. Os 5 primeiros da fila entram como
@@ -473,68 +470,28 @@ function setConfig(db, input) {
 
 function resetSeason(db) {
   db.events = [];
-  db.matches = [];
-  db.session.lastResult = null;
+  db.session.results = [];
   db.season++;
 }
 
 // ---------- estado publico ----------
-
-// quem jogou cada partida da temporada e se venceu (pelo placar: o empate que o admin desempata não conta como vitória)
-function appearances(db) {
-  const out = [];
-  db.matches.forEach((m) => {
-    if (!m.teamA || !m.teamB) return;
-    [[m.teamA, m.scoreA, m.scoreB], [m.teamB, m.scoreB, m.scoreA]].forEach(([team, mine, theirs]) => {
-      // partidas gravadas antes de existir playerIds: acha o jogador pelo nome (únicos no cadastro)
-      const people = team.playerIds
-        ? team.playerIds.map((id, i) => ({ id, name: team.players[i] }))
-        : team.players.map((name) => ({ id: (db.players.find((p) => p.name === name) || {}).id, name })).filter((p) => p.id);
-      people.forEach((p) => out.push({ ...p, win: mine > theirs }));
-    });
-  });
-  return out;
-}
 
 function ranking(db) {
   const map = new Map();
   // nome atual do cadastro; a cópia gravada no gol só vale se o jogador foi excluído
   const nameOf = (id, saved) => (playerById(db, id) || {}).name || saved;
   const row = (id, saved) => {
-    if (!map.has(id)) map.set(id, { id, name: nameOf(id, saved), goals: 0, assists: 0, games: 0, wins: 0 });
+    if (!map.has(id)) map.set(id, { id, name: nameOf(id, saved), goals: 0, assists: 0 });
     return map.get(id);
   };
   db.events.forEach((e) => {
     row(e.scorerId, e.scorerName).goals++;
     if (e.assistId) row(e.assistId, e.assistName).assists++;
   });
-  appearances(db).forEach((a) => {
-    const r = row(a.id, a.name);
-    r.games++;
-    if (a.win) r.wins++;
-  });
   return [...map.values()];
 }
 
 const publicPlayers = (db) => db.players.map(({ id, name, position }) => ({ id, name, position }));
-
-// resultados das partidas da pelada em andamento, da mais recente para a mais antiga
-const RESULTS_LIMIT = 30;
-function results(db) {
-  const s = db.session;
-  if (!s.id) return [];
-  return db.matches.filter((m) => m.sessionId === s.id).slice(0, RESULTS_LIMIT).map((m) => ({
-    id: m.id,
-    endedAt: m.endedAt,
-    reason: m.reason,
-    teamA: { id: m.teamA.id, name: m.teamA.name, color: m.teamA.color },
-    teamB: { id: m.teamB.id, name: m.teamB.name, color: m.teamB.color },
-    scoreA: m.scoreA,
-    scoreB: m.scoreB,
-    winner: m.winner,
-    goals: m.goals.map((g) => ({ id: g.id, teamId: g.teamId, scorerName: g.scorerName, assistName: g.assistName, ms: g.ms })),
-  }));
-}
 
 // admin vê tudo (inclusive o nível dos jogadores); espectador vê a pelada só com o código,
 // mas o ranking é público
@@ -560,7 +517,7 @@ function viewState(db, now, { admin, code }) {
       needsTiebreak: needsTiebreak(db),
       bothOut: needsBothOut(db),
     },
-    results: results(db),
+    results: s.results,
   };
 }
 

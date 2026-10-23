@@ -478,27 +478,19 @@
         ${s.matchesPlayed === 0 && s.match.status === 'idle' ? '<button class="btn" data-act="redraw">🔄 Refazer sorteio</button>' : ''}</div>` : ''}`;
   }
 
-  const RANKS = { goals: ['⚽ Gols'], assists: ['🅰 Assist.'], part: ['🔥 Particip.'], wins: ['🏆 Vitórias'], games: ['🏟 Jogos'] };
+  const RANKS = { goals: ['⚽ Gols'], assists: ['🅰 Assist.'], part: ['🔥 Particip.'] };
 
   function viewRanking() {
     const rows = state.ranking
-      .map((r) => ({ ...r, part: r.goals + r.assists, rate: r.games ? r.wins / r.games : 0 }))
+      .map((r) => ({ ...r, part: r.goals + r.assists }))
       .filter((r) => r[rankBy] > 0)
-      .sort((x, y) => y[rankBy] - x[rankBy] || (rankBy === 'wins' ? y.rate - x.rate : 0) || y.goals - x.goals || y.assists - x.assists
-        || y.wins - x.wins || x.name.localeCompare(y.name, 'pt-BR'));
+      .sort((x, y) => y[rankBy] - x[rankBy] || y.goals - x.goals || y.assists - x.assists || x.name.localeCompare(y.name, 'pt-BR'));
     const medal = (i) => ['🥇', '🥈', '🥉'][i] || i + 1;
     const items = rows.map((r, i) => `<li class="rk-row ${i < 3 ? 'top' + (i + 1) : ''}">
       <span class="rk-pos">${medal(i)}</span>
-      <span class="rk-name"><span class="rk-n">${badges(r.id)}${esc(r.name)}</span><small>⚽ ${r.goals} gol${r.goals === 1 ? '' : 's'} · 🅰 ${r.assists} assist.</small>
-        <small>🏟 ${r.games} jogo${r.games === 1 ? '' : 's'} · 🏆 ${r.wins} vit.${rankBy === 'wins' ? ` (${Math.round(r.rate * 100)}%)` : ''}</small></span>
+      <span class="rk-name"><span class="rk-n">${badges(r.id)}${esc(r.name)}</span><small>⚽ ${r.goals} gol${r.goals === 1 ? '' : 's'} · 🅰 ${r.assists} assist.</small></span>
       <span class="rk-val">${r[rankBy]}</span></li>`).join('');
-    const hint = {
-      goals: 'Total de gols na temporada.',
-      assists: 'Total de assistências na temporada.',
-      part: 'Participações = gols + assistências.',
-      wins: 'Vitórias pelo placar (empate desempatado pelo organizador não conta). Entre parênteses, o aproveitamento.',
-      games: 'Partidas disputadas na temporada.',
-    }[rankBy];
+    const hint = { goals: 'Total de gols na temporada.', assists: 'Total de assistências na temporada.', part: 'Participações = gols + assistências.' }[rankBy];
     return `<section class="card"><h2>🏆 Ranking · temporada ${state.season}</h2>
       <div class="seg">${Object.entries(RANKS).map(([k, [l2]]) => `<button data-act="rank" data-by="${k}" class="${rankBy === k ? 'on' : ''}">${l2}</button>`).join('')}</div>
       ${rows.length ? `<ol class="rk">${items}</ol><p class="muted" style="margin:10px 0 0;font-size:.8rem">${hint}</p>
@@ -543,7 +535,7 @@
     return `<section class="card"><h2>Pelada de hoje</h2>
       ${state.session.status === 'none'
         ? '<button class="btn primary" data-act="startpelada">▶ Iniciar pelada</button>'
-        : `<p class="muted">Código atual: <b>${esc(state.session.code)}</b>. Ao encerrar, os times e a fila são desmontados e o código deixa de funcionar. Gols e assistências continuam na temporada.</p>
+        : `<p class="muted">Código atual: <b>${esc(state.session.code)}</b>. Ao encerrar, os times, a fila e os resultados de hoje são apagados e o código deixa de funcionar. Gols e assistências continuam na temporada.</p>
            <button class="btn danger" data-act="endpelada">Encerrar pelada</button>`}</section>
       <section class="card"><h2>Regras da partida</h2>
       <form id="cfg"><div class="field"><label>Duração (segundos)</label><input name="matchSeconds" type="number" value="${c.matchSeconds}"></div>
@@ -551,7 +543,7 @@
       <div class="field"><label>Jogadores por time (com goleiro)</label><input name="teamSize" type="number" value="${c.teamSize}"></div>
       <button class="btn primary">Salvar regras</button></form></section>
       <section class="card"><h2>Temporada ${state.season}</h2>
-      <p class="muted">Apaga todos os gols, assistências e o histórico de partidas para começar uma nova temporada. Os jogadores cadastrados são mantidos.</p>
+      <p class="muted">Apaga todos os gols e assistências para começar uma nova temporada. Os jogadores cadastrados são mantidos.</p>
       <button class="btn danger" data-act="resetseason">Começar nova temporada</button></section>`;
   }
 
@@ -757,7 +749,7 @@
     tab: (el) => { tab = el.dataset.tab; render(); },
     rank: (el) => { rankBy = el.dataset.by; render(); },
     startpelada: () => post('/api/session/start'),
-    endpelada: async () => { if (await ask('Encerrar a pelada? Os times e o código serão apagados.', 'Encerrar')) post('/api/session/end'); },
+    endpelada: async () => { if (await ask('Encerrar a pelada? Os times, a fila, os resultados de hoje e o código serão apagados.', 'Encerrar')) post('/api/session/end'); },
     invite: inviteModal,
     copycode: async () => { toast(await copyText(state.session.code) ? 'Código copiado' : `Código: ${state.session.code}`); },
     arrive: arriveModal,
@@ -786,7 +778,7 @@
     addplayer: () => playerModal(null),
     editplayer: (el) => playerModal(player(el.dataset.id)),
     delplayer: async (el) => { if (await ask(`Excluir o cadastro de ${pname(el)}? Os gols dele continuam no ranking.`, 'Excluir')) act('DELETE', `/api/players/${el.dataset.id}`); },
-    resetseason: async () => { if (await ask('Apagar TODOS os gols, assistências e partidas da temporada?', 'Apagar tudo')) post('/api/season/reset'); },
+    resetseason: async () => { if (await ask('Apagar TODOS os gols e assistências da temporada?', 'Apagar tudo')) post('/api/season/reset'); },
   };
 
   document.addEventListener('pointerdown', () => { if (soundOn) audio(); });

@@ -301,7 +301,7 @@ test('requestId inválido é ignorado (sem idempotência), como um pedido antigo
   assert.equal(db.session.match.goals[0].rid, undefined);
 });
 
-test('renomear o jogador atualiza o nome no ranking, nos gols da partida e no histórico', () => {
+test('renomear o jogador atualiza o nome no ranking, nos gols da partida e nos resultados da pelada', () => {
   const db = started(0);
   const [a] = db.session.teams;
   const pid = a.players[0];
@@ -314,8 +314,7 @@ test('renomear o jogador atualiza o nome no ranking, nos gols da partida e no hi
   const st = L.viewState(db, 1, { admin: true });
   assert.equal(st.ranking.find((r) => r.id === pid).name, 'Novo Nome');
   assert.equal(db.events[0].scorerName, 'Novo Nome');
-  assert.equal(db.matches[0].goals[0].scorerName, 'Novo Nome');
-  assert.equal(db.session.lastResult.goals[0].scorerName, 'Novo Nome');
+  assert.equal(st.results[0].goals[0].scorerName, 'Novo Nome');
 
   // cópias antigas e desatualizadas também não vazam para o ranking
   db.events[0].scorerName = 'Nome Velho';
@@ -325,7 +324,7 @@ test('renomear o jogador atualiza o nome no ranking, nos gols da partida e no hi
   assert.equal(L.viewState(db, 1, { admin: true }).ranking.find((r) => r.id === pid).name, 'Nome Velho');
 });
 
-test('resultados: cada pelada mostra só as suas partidas, sem expor times com nomes dos jogadores', () => {
+test('resultados da pelada: placar e gols de cada partida, só até a pelada acabar', () => {
   const db = started(5);
   const [a, b] = db.session.teams;
   L.recordGoal(db, { teamId: a.id, scorerId: a.players[0], assistId: a.players[1] }, 2000);
@@ -336,64 +335,50 @@ test('resultados: cada pelada mostra só as suas partidas, sem expor times com n
   const st = L.viewState(db, 1, { admin: false, code: db.session.code });
   assert.equal(st.results.length, 1);
   const r = st.results[0];
-  assert.deepEqual([r.scoreA, r.scoreB, r.winner, r.reason], [2, 0, a.name, 'gols']);
+  assert.deepEqual([r.scoreA, r.scoreB, r.reason, r.endedAt], [2, 0, 'gols', 4000]);
   assert.deepEqual([r.teamA.id, r.teamB.id], [a.id, b.id]);
-  assert.equal(r.teamA.players, undefined);
+  assert.deepEqual(Object.keys(r.teamA).sort(), ['color', 'id', 'name']); // sem lista de jogadores
   assert.equal(r.goals.length, 2);
   assert.equal(r.goals[0].assistName, db.players.find((p) => p.id === a.players[1]).name);
+  assert.equal(r.goals[0].rid, undefined);
   assert.equal(L.viewState(db, 1, { admin: false, code: 'ERRADO' }).results, undefined); // sem código, nada
 
-  // nova pelada: a lista recomeça (as partidas continuam na temporada)
+  // não guarda histórico de partidas fora da pelada
+  assert.equal(db.matches, undefined);
+  assert.equal(db.session.lastResult, undefined);
+
+  // a pelada acabou: a lista some junto
   L.endPelada(db);
   L.startPelada(db);
   assert.deepEqual(L.viewState(db, 1, { admin: true }).results, []);
-  assert.equal(db.matches.length, 1);
 });
 
-test('pelada guardada antes de existir o id da pelada ganha um id ao carregar', () => {
+test('resultados da pelada: guarda só os 30 mais recentes, do mais novo para o mais antigo', () => {
   const db = started(0);
-  db.session.id = null;
-  assert.ok(L.normalizeDb(db).session.id);
-  assert.equal(L.normalizeDb(L.defaultDb()).session.id, null); // sem pelada, sem id
+  for (let i = 0; i < 32; i++) {
+    const [a] = db.session.teams;
+    L.finishMatch(db, 'manual', 5000);
+    db.session.match.id = `m${i}`;
+    L.nextMatch(db, 6000 + i, a.id);
+    L.startMatch(db, 7000);
+  }
+  const list = L.viewState(db, 1, { admin: true }).results;
+  assert.equal(list.length, 30);
+  assert.equal(list[0].id, 'm31');
+  assert.equal(list[29].id, 'm2');
+  assert.equal(db.session.matchesPlayed, 32);
 });
 
-test('ranking traz jogos e vitórias: vitória só pelo placar, empate desempatado não conta, quem esperou não joga', () => {
-  const db = started(5);
-  const [a, b] = db.session.teams;
-  const waiting = db.session.queue.slice();
-  const rank = (id) => L.viewState(db, 1, { admin: true }).ranking.find((r) => r.id === id);
-
-  // partida 1: o time a vence por 2 x 0
-  L.recordGoal(db, { teamId: a.id, scorerId: a.players[0] }, 2000);
-  L.recordGoal(db, { teamId: a.id, scorerId: a.players[1], assistId: a.players[0] }, 3000);
-  L.nextMatch(db, 4000);
-  a.players.forEach((id) => assert.deepEqual([rank(id).games, rank(id).wins], [1, 1]));
-  b.players.forEach((id) => assert.deepEqual([rank(id).games, rank(id).wins], [1, 0]));
-  assert.equal(rank(a.players[0]).goals, 1);
-  waiting.forEach((id) => assert.equal(rank(id), undefined)); // ainda não entraram em campo
-
-  // partida 2: 0 x 0 e o admin define que o time a segue; o empate não vira vitória
-  const [stay, challenger] = db.session.teams;
-  assert.equal(stay.id, a.id);
-  L.startMatch(db, 5000);
-  L.finishMatch(db, 'manual', 6000);
-  L.nextMatch(db, 7000, a.id);
-  a.players.forEach((id) => assert.deepEqual([rank(id).games, rank(id).wins], [2, 1]));
-  challenger.players.forEach((id) => assert.deepEqual([rank(id).games, rank(id).wins], [1, 0]));
-
-  // partidas antigas (sem playerIds) são achadas pelo nome
-  const legacy = JSON.parse(JSON.stringify(db));
-  legacy.matches.forEach((m) => { delete m.teamA.playerIds; delete m.teamB.playerIds; });
-  assert.deepEqual(L.viewState(legacy, 1, { admin: true }).ranking, L.viewState(db, 1, { admin: true }).ranking);
-
-  // quem teve o cadastro excluído continua com o nome gravado na partida
-  const gone = a.players[2];
-  const goneName = db.players.find((p) => p.id === gone).name;
-  L.deletePlayer(db, gone);
-  assert.equal(rank(gone).name, goneName);
-  assert.equal(rank(gone).games, 2);
-
-  // nova temporada zera tudo
-  L.resetSeason(db);
-  assert.equal(L.viewState(db, 1, { admin: true }).ranking.length, 0);
+test('dados antigos: histórico de partidas, lastResult e id da pelada são descartados ao carregar', () => {
+  const old = started(0);
+  old.matches = [{ id: 'm', teamA: {}, teamB: {} }];
+  old.session.lastResult = { id: 'm' };
+  old.session.id = 'abc';
+  delete old.session.results;
+  const db = L.normalizeDb(old);
+  assert.equal(db.matches, undefined);
+  assert.equal(db.session.lastResult, undefined);
+  assert.equal(db.session.id, undefined);
+  assert.deepEqual(db.session.results, []);
+  assert.equal(db.session.status, 'active'); // o resto da pelada continua
 });

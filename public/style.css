@@ -290,8 +290,3 @@ tr.top td:nth-child(2) { font-weight: 800; }
 .qr svg { display: block; width: 100%; height: auto; }
 a.btn { display: inline-flex; align-items: center; justify-content: center; color: inherit; text-decoration: none; }
 #invlink { font-size: .85rem; }
-
-/* ranking: 5 visões em duas linhas (3 + 2) */
-.seg { grid-template-columns: repeat(6, 1fr); }
-.seg button { grid-column: span 2; }
-.seg button:nth-child(n+4) { grid-column: span 3; }
